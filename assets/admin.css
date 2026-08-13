@@ -76,9 +76,20 @@
     width: 100%;
 }
 
-.syncport__tables {
+.syncport__tables,
+.syncport__entities {
     max-width: 720px;
     width: 100%;
+}
+
+.syncport__entities {
+    min-height: 260px;
+}
+
+#syncport-connection-info,
+textarea[name="connection_info"] {
+    font-family: Consolas, Monaco, monospace;
+    max-width: 720px;
 }
 
 .syncport__table-actions {

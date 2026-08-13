@@ -2,7 +2,9 @@
 /** @var array<string, array<string, mixed>> $connections */
 /** @var array<int, object> $operations */
 /** @var array<string, WP_Post_Type> $postTypes */
+/** @var array<int, array<string, mixed>> $contentItems */
 /** @var array<int, string> $tables */
+/** @var string $connectionInfo */
 ?>
 <div class="wrap syncport">
     <header class="syncport__header">
@@ -60,11 +62,17 @@
                         <label><input type="checkbox" name="post_types[]" value="<?php echo esc_attr($postType->name); ?>" <?php checked($postType->name, 'page'); ?>> <?php echo esc_html($postType->labels->name); ?></label>
                     <?php endforeach; ?>
                 </div>
-                <label class="syncport__field">
-                    <span><?php esc_html_e('Specific IDs', 'syncport'); ?></span>
-                    <input type="text" name="post_ids" placeholder="42, 108, 256" aria-describedby="syncport-post-ids-hint">
-                    <small id="syncport-post-ids-hint"><?php esc_html_e('Leave empty to migrate all entities of the selected types.', 'syncport'); ?></small>
-                </label>
+                <div class="syncport__field">
+                    <label for="syncport-post-ids"><?php esc_html_e('Entities', 'syncport'); ?></label>
+                    <select id="syncport-post-ids" class="syncport__entities" name="post_ids[]" multiple size="12" aria-describedby="syncport-post-ids-hint">
+                        <?php foreach ($contentItems as $item) : ?>
+                            <option value="<?php echo esc_attr((string) $item['id']); ?>">
+                                <?php echo esc_html(sprintf('%1$s — %2$s%3$s (#%4$d)', $item['title'], $item['post_type_label'], $item['language'] ? ' · ' . strtoupper((string) $item['language']) : '', $item['id'])); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <small id="syncport-post-ids-hint"><?php esc_html_e('Select one or more entities. Leave the selection empty to migrate all entities of the selected post types.', 'syncport'); ?></small>
+                </div>
                 <label><input type="checkbox" name="include_media" value="1" checked> <?php esc_html_e('Include directly used media files', 'syncport'); ?></label>
             </div>
 
@@ -106,8 +114,11 @@
             <form id="syncport-connection-form" class="syncport__card">
                 <h2><?php esc_html_e('Add connection', 'syncport'); ?></h2>
                 <label class="syncport__field"><span><?php esc_html_e('Name', 'syncport'); ?></span><input type="text" name="name" required></label>
-                <label class="syncport__field"><span><?php esc_html_e('Site URL', 'syncport'); ?></span><input type="url" name="url" placeholder="https://example.com" required></label>
-                <label class="syncport__field"><span><?php esc_html_e('Remote API key', 'syncport'); ?></span><input type="password" name="key" required autocomplete="new-password"></label>
+                <label class="syncport__field">
+                    <span><?php esc_html_e('Connection info', 'syncport'); ?></span>
+                    <textarea name="connection_info" rows="3" placeholder="https://example.com&#10;remote-api-key" required spellcheck="false" autocomplete="off"></textarea>
+                    <small><?php esc_html_e('Paste the complete connection info copied from the remote site.', 'syncport'); ?></small>
+                </label>
                 <div class="syncport__choices">
                     <label><input type="checkbox" name="allow_push" value="1" checked> <?php esc_html_e('Allow push', 'syncport'); ?></label>
                     <label><input type="checkbox" name="allow_pull" value="1" checked> <?php esc_html_e('Allow pull', 'syncport'); ?></label>
@@ -150,7 +161,12 @@
                 <label><input type="checkbox" name="allow_push" value="1" <?php checked((bool) get_option('syncport_allow_push')); ?>> <?php esc_html_e('Accept push requests', 'syncport'); ?></label>
                 <label><input type="checkbox" name="allow_pull" value="1" <?php checked((bool) get_option('syncport_allow_pull')); ?>> <?php esc_html_e('Accept pull requests', 'syncport'); ?></label>
             </div>
-            <label class="syncport__field"><span><?php esc_html_e('This site API key', 'syncport'); ?></span><input id="syncport-api-key" type="text" value="<?php echo esc_attr((string) get_option('syncport_api_key')); ?>" readonly></label>
+            <div class="syncport__field">
+                <label for="syncport-connection-info"><?php esc_html_e('Connection info', 'syncport'); ?></label>
+                <textarea id="syncport-connection-info" rows="3" readonly spellcheck="false"><?php echo esc_textarea($connectionInfo); ?></textarea>
+                <small><?php esc_html_e('Copy and paste this complete value into the connection form on another site.', 'syncport'); ?></small>
+                <div><button class="button" type="button" data-copy-connection-info><?php esc_html_e('Copy connection info', 'syncport'); ?></button></div>
+            </div>
             <label><input type="checkbox" name="regenerate_key" value="1"> <?php esc_html_e('Regenerate the API key and revoke existing connections', 'syncport'); ?></label>
             <p class="submit"><button class="button button-primary" type="submit"><?php esc_html_e('Save settings', 'syncport'); ?></button></p>
         </form>

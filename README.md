@@ -88,8 +88,8 @@ assets/               build-free JavaScript and CSS
 
 1. Install and activate the same major SyncPort version on both sites.
 2. On the receiving site, open Tools → SyncPort → Settings.
-3. Enable the required incoming direction and copy the API key.
-4. On the initiating site, add the remote URL and copied key under Connections.
+3. Enable the required incoming direction and copy the complete Connection info value.
+4. On the initiating site, paste that value under Connections.
 5. Test the connection before running a preflight.
 
 Regenerating the API key immediately revokes connections that use the previous key.

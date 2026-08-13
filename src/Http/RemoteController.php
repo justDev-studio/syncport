@@ -25,7 +25,7 @@ final class RemoteController
     public function register(): void
     {
         add_action('rest_api_init', function (): void {
-            foreach (['handshake', 'manifest', 'preflight', 'apply'] as $endpoint) {
+            foreach (['handshake', 'entities', 'manifest', 'preflight', 'apply'] as $endpoint) {
                 register_rest_route('syncport/v1', '/' . $endpoint, [
                     'methods' => 'POST',
                     'callback' => [$this, $endpoint],
@@ -48,6 +48,20 @@ final class RemoteController
             'php_version' => PHP_VERSION,
             'acf' => defined('ACF_VERSION') ? ACF_VERSION : null,
             'wpml' => defined('ICL_SITEPRESS_VERSION') ? ICL_SITEPRESS_VERSION : null,
+        ]);
+    }
+
+    public function entities(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        if (is_wp_error($verified = $this->authenticator->verify($request))) {
+            return $verified;
+        }
+        if (!get_option('syncport_allow_pull', false)) {
+            return new WP_Error('syncport_pull_disabled', __('Pull requests are disabled on this site.', 'syncport'), ['status' => 403]);
+        }
+        $payload = $this->payload($request);
+        return new WP_REST_Response([
+            'entities' => $this->builder->listEntities((array) ($payload['post_types'] ?? [])),
         ]);
     }
 

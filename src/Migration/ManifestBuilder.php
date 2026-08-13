@@ -40,6 +40,37 @@ final class ManifestBuilder
         return $manifest;
     }
 
+    /** @param array<int, string> $postTypes @return array<int, array<string, mixed>> */
+    public function listEntities(array $postTypes): array
+    {
+        $postTypes = array_values(array_filter(array_map('sanitize_key', $postTypes), 'post_type_exists'));
+        if ($postTypes === []) {
+            return [];
+        }
+
+        $posts = get_posts([
+            'post_type' => $postTypes,
+            'post_status' => 'any',
+            'posts_per_page' => -1,
+            'orderby' => ['post_type' => 'ASC', 'title' => 'ASC'],
+            'order' => 'ASC',
+            'suppress_filters' => false,
+        ]);
+
+        return array_map(function (WP_Post $post): array {
+            $postType = get_post_type_object($post->post_type);
+            $language = $this->language($post->ID);
+            return [
+                'id' => $post->ID,
+                'title' => $post->post_title !== '' ? $post->post_title : __('(no title)', 'syncport'),
+                'post_type' => $post->post_type,
+                'post_type_label' => $postType ? $postType->labels->singular_name : $post->post_type,
+                'status' => $post->post_status,
+                'language' => $language['code'] ?? '',
+            ];
+        }, $posts);
+    }
+
     /** @param array<string, mixed> $request @return array<int, array<string, mixed>> */
     private function posts(array $request): array
     {

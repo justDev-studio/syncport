@@ -1,7 +1,10 @@
 (() => {
     const config = window.syncportAdmin;
     const notice = document.querySelector('#syncport-notice');
+    const entitySelect = document.querySelector('#syncport-post-ids');
+    const migrationForm = document.querySelector('#syncport-migration-form');
     let readyResolutions = {};
+    let entityRequest = 0;
 
     const escapeHtml = (value) => String(value)
         .replaceAll('&', '&amp;')
@@ -62,17 +65,20 @@
     });
 
     const updateScope = (input) => {
-            document.querySelectorAll('[data-scope-fields]').forEach((fields) => {
-                const active = fields.dataset.scopeFields === input.value;
-                fields.hidden = !active;
-                fields.querySelectorAll('input, select, textarea, button').forEach((control) => {
-                    control.disabled = !active;
-                });
+        document.querySelectorAll('[data-scope-fields]').forEach((fields) => {
+            const active = fields.dataset.scopeFields === input.value;
+            fields.hidden = !active;
+            fields.querySelectorAll('input, select, textarea, button').forEach((control) => {
+                control.disabled = !active;
             });
+        });
     };
 
     document.querySelectorAll('input[name="scope"]').forEach((input) => {
-        input.addEventListener('change', () => updateScope(input));
+        input.addEventListener('change', () => {
+            updateScope(input);
+            if (input.value === 'content') loadEntities();
+        });
     });
     updateScope(document.querySelector('input[name="scope"]:checked'));
 
@@ -111,8 +117,67 @@
 
     bindForm('#syncport-connection-form', 'syncport_save_connection');
     bindForm('#syncport-settings-form', 'syncport_save_settings', (result) => {
-        document.querySelector('#syncport-api-key').value = result.key;
+        document.querySelector('#syncport-connection-info').value = result.connectionInfo;
         message(result.message);
+    });
+
+    const entityLabel = (entity) => {
+        const language = entity.language ? ` · ${String(entity.language).toUpperCase()}` : '';
+        return `${entity.title} — ${entity.post_type_label}${language} (#${entity.id})`;
+    };
+
+    const loadEntities = async () => {
+        if (!entitySelect || !migrationForm) return;
+        const direction = migrationForm.elements.direction.value;
+        const connectionId = migrationForm.elements.connection_id.value;
+        const postTypes = [...migrationForm.querySelectorAll('input[name="post_types[]"]:checked')].map((input) => input.value);
+        const requestId = ++entityRequest;
+        if (direction === 'pull' && !connectionId) {
+            entitySelect.replaceChildren(new Option(config.strings.selectEntity, ''));
+            entitySelect.disabled = true;
+            return;
+        }
+
+        entitySelect.replaceChildren(new Option(config.strings.loadingEntities, ''));
+        entitySelect.disabled = true;
+        try {
+            const result = await request('syncport_list_entities', {
+                direction,
+                connection_id: connectionId,
+                post_types: postTypes,
+            });
+            if (requestId !== entityRequest) return;
+            const entities = result.entities || [];
+            entitySelect.replaceChildren(...entities.map((entity) => new Option(entityLabel(entity), entity.id)));
+            if (!entities.length) {
+                entitySelect.append(new Option(config.strings.noEntities, ''));
+            }
+        } catch (error) {
+            if (requestId !== entityRequest) return;
+            entitySelect.replaceChildren(new Option(error.message, ''));
+            message(error.message, 'error');
+        } finally {
+            if (requestId === entityRequest) {
+                entitySelect.disabled = migrationForm.elements.scope.value !== 'content';
+            }
+        }
+    };
+
+    migrationForm?.elements.direction.addEventListener('change', loadEntities);
+    migrationForm?.elements.connection_id.addEventListener('change', loadEntities);
+    migrationForm?.querySelectorAll('input[name="post_types[]"]').forEach((input) => input.addEventListener('change', loadEntities));
+
+    document.querySelector('[data-copy-connection-info]')?.addEventListener('click', async () => {
+        const field = document.querySelector('#syncport-connection-info');
+        try {
+            await navigator.clipboard.writeText(field.value);
+            message(config.strings.connectionCopied);
+        } catch (error) {
+            field.focus();
+            field.select();
+            const copied = document.execCommand('copy');
+            message(copied ? config.strings.connectionCopied : config.strings.copyFailed, copied ? 'success' : 'error');
+        }
     });
 
     document.querySelectorAll('[data-test-connection]').forEach((button) => {

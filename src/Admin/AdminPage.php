@@ -34,6 +34,7 @@ final class AdminPage
         add_action('wp_ajax_syncport_save_connection', [$this, 'saveConnection']);
         add_action('wp_ajax_syncport_delete_connection', [$this, 'deleteConnection']);
         add_action('wp_ajax_syncport_test_connection', [$this, 'testConnection']);
+        add_action('wp_ajax_syncport_list_entities', [$this, 'listEntities']);
         add_action('wp_ajax_syncport_preflight', [$this, 'preflight']);
         add_action('wp_ajax_syncport_apply', [$this, 'apply']);
         add_action('wp_ajax_syncport_save_settings', [$this, 'saveSettings']);
@@ -74,6 +75,11 @@ final class AdminPage
                 'apply' => __('Apply migration', 'syncport'),
                 'resolveAll' => __('Resolve every conflict before applying the migration.', 'syncport'),
                 'migrationStatus' => __('Migration status: %s.', 'syncport'),
+                'loadingEntities' => __('Loading entities…', 'syncport'),
+                'noEntities' => __('No entities found for the selected post types.', 'syncport'),
+                'selectEntity' => __('Select one or more entities, or leave empty to migrate all.', 'syncport'),
+                'connectionCopied' => __('Connection info copied.', 'syncport'),
+                'copyFailed' => __('Could not copy connection info.', 'syncport'),
             ],
         ]);
     }
@@ -86,15 +92,16 @@ final class AdminPage
         $connections = $this->connections->all();
         $operations = $this->operations->recent();
         $postTypes = get_post_types(['show_ui' => true], 'objects');
+        $contentItems = $this->builder->listEntities(['page']);
         $tables = $this->tables();
+        $connectionInfo = $this->connectionInfo();
         require SYNCPORT_PATH . 'templates/admin-page.php';
     }
 
     public function saveConnection(): void
     {
         $this->guard();
-        $url = esc_url_raw((string) ($_POST['url'] ?? ''));
-        $key = sanitize_text_field((string) ($_POST['key'] ?? ''));
+        [$url, $key] = $this->parseConnectionInfo((string) ($_POST['connection_info'] ?? ''));
         if (!wp_http_validate_url($url) || $key === '') {
             wp_send_json_error(['message' => __('A valid URL and API key are required.', 'syncport')], 422);
         }
@@ -125,6 +132,27 @@ final class AdminPage
             wp_send_json_error(['message' => $response->get_error_message(), 'data' => $response->get_error_data()], 502);
         }
         wp_send_json_success($response);
+    }
+
+    public function listEntities(): void
+    {
+        $this->guard();
+        $postTypes = array_values(array_filter(array_map('sanitize_key', (array) ($_POST['post_types'] ?? []))));
+        $direction = ($_POST['direction'] ?? '') === 'pull' ? 'pull' : 'push';
+
+        if ($direction === 'pull') {
+            $connection = $this->connection();
+            if (empty($connection['allow_pull'])) {
+                wp_send_json_error(['message' => __('Pull is disabled for this connection.', 'syncport')], 403);
+            }
+            $response = $this->client->post($connection, 'entities', ['post_types' => $postTypes]);
+            if (is_wp_error($response)) {
+                wp_send_json_error(['message' => $response->get_error_message()], 502);
+            }
+            wp_send_json_success(['entities' => (array) ($response['entities'] ?? [])]);
+        }
+
+        wp_send_json_success(['entities' => $this->builder->listEntities($postTypes)]);
     }
 
     public function preflight(): void
@@ -201,13 +229,13 @@ final class AdminPage
         if (!empty($_POST['regenerate_key'])) {
             update_option('syncport_api_key', wp_generate_password(64, false, false), false);
         }
-        wp_send_json_success(['message' => __('Settings saved.', 'syncport'), 'key' => get_option('syncport_api_key')]);
+        wp_send_json_success(['message' => __('Settings saved.', 'syncport'), 'connectionInfo' => $this->connectionInfo()]);
     }
 
     /** @return array<string, mixed> */
     private function migrationRequest(): array
     {
-        $postIds = preg_split('/[\s,]+/', sanitize_text_field((string) ($_POST['post_ids'] ?? ''))) ?: [];
+        $postIds = (array) ($_POST['post_ids'] ?? []);
         $options = preg_split('/[\s,]+/', sanitize_text_field((string) ($_POST['options'] ?? ''))) ?: [];
         return [
             'direction' => in_array($_POST['direction'] ?? '', ['push', 'pull'], true) ? $_POST['direction'] : 'push',
@@ -239,6 +267,21 @@ final class AdminPage
     {
         global $wpdb;
         return array_map(static fn ($row): string => (string) $row[0], $wpdb->get_results('SHOW FULL TABLES', ARRAY_N));
+    }
+
+    /** @return array{0: string, 1: string} */
+    private function parseConnectionInfo(string $connectionInfo): array
+    {
+        $parts = preg_split('/\s+/', trim(wp_unslash($connectionInfo)), 2) ?: [];
+        return [
+            esc_url_raw((string) ($parts[0] ?? '')),
+            sanitize_text_field((string) ($parts[1] ?? '')),
+        ];
+    }
+
+    private function connectionInfo(): string
+    {
+        return home_url() . "\n" . (string) get_option('syncport_api_key');
     }
 
     private function guard(): void
