@@ -1,0 +1,40 @@
+{
+  "name": "justdev/syncport",
+  "description": "Selectively migrate WordPress content, settings, media, and database tables between connected sites.",
+  "type": "wordpress-plugin",
+  "license": "GPL-2.0-or-later",
+  "homepage": "https://justdev.org",
+  "authors": [
+    {
+      "name": "justDev",
+      "homepage": "https://justdev.org"
+    }
+  ],
+  "keywords": [
+    "migration",
+    "plugin",
+    "sync",
+    "wordpress"
+  ],
+  "require": {
+    "php": "^8.1",
+    "composer/installers": "^2.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "JustDev\\SyncPort\\": "src/"
+    }
+  },
+  "extra": {
+    "installer-name": "syncport"
+  },
+  "config": {
+    "allow-plugins": {
+      "composer/installers": true
+    },
+    "optimize-autoloader": true,
+    "sort-packages": true
+  },
+  "minimum-stability": "stable",
+  "prefer-stable": true
+}

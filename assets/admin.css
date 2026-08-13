@@ -1,0 +1,136 @@
+.syncport {
+    max-width: 1180px;
+}
+
+.syncport__header {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+    margin: 24px 0;
+}
+
+.syncport__header h1,
+.syncport__header p {
+    margin: 0;
+}
+
+.syncport__header p {
+    color: #646970;
+    margin-top: 6px;
+}
+
+.syncport__version {
+    background: #fff;
+    border: 1px solid #c3c4c7;
+    border-radius: 999px;
+    padding: 4px 10px;
+}
+
+.syncport__panel {
+    margin-top: 20px;
+}
+
+.syncport__card {
+    background: #fff;
+    border: 1px solid #c3c4c7;
+    box-shadow: 0 1px 1px rgb(0 0 0 / 4%);
+    margin-bottom: 20px;
+    padding: 24px;
+}
+
+.syncport__card > :first-child {
+    margin-top: 0;
+}
+
+.syncport__grid,
+.syncport__columns {
+    display: grid;
+    gap: 20px;
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.syncport__field,
+.syncport__grid label {
+    display: grid;
+    gap: 6px;
+}
+
+.syncport__field input,
+.syncport__field textarea,
+.syncport__grid select {
+    max-width: none;
+    width: 100%;
+}
+
+.syncport__scope,
+.syncport__choices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin: 24px 0;
+}
+
+.syncport__scope legend {
+    font-weight: 600;
+    margin-bottom: 10px;
+    width: 100%;
+}
+
+.syncport__tables {
+    max-width: 720px;
+    width: 100%;
+}
+
+.syncport__table-actions {
+    margin-bottom: 8px;
+}
+
+.syncport__connections {
+    margin: 0;
+}
+
+.syncport__connections li {
+    align-items: center;
+    border-bottom: 1px solid #dcdcde;
+    display: flex;
+    justify-content: space-between;
+    padding: 12px 0;
+}
+
+.syncport__connections code {
+    display: block;
+    margin-top: 4px;
+}
+
+.syncport__conflicts {
+    display: grid;
+    gap: 10px;
+    margin: 20px 0;
+}
+
+.syncport__conflicts label {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+}
+
+#syncport-notice {
+    bottom: 20px;
+    max-width: 520px;
+    position: fixed;
+    right: 20px;
+    z-index: 100000;
+}
+
+@media (min-width: 900px) {
+    .syncport__grid,
+    .syncport__columns {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .syncport * {
+        scroll-behavior: auto;
+    }
+}
