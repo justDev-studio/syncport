@@ -50,7 +50,7 @@
         progressRegion.classList.toggle('is-error', state === 'error');
         progressLabel.textContent = label;
         progressState.textContent = state === 'complete' ? '100%' : state === 'error' ? config.strings.operationFailed : config.strings.working;
-        if (state === 'complete') {
+        if (state === 'complete' || state === 'error') {
             progressBar.value = 100;
         } else {
             progressBar.removeAttribute('value');
@@ -270,7 +270,7 @@
             const result = await request('syncport_apply', { operation: button.dataset.applyOperation, resolutions: JSON.stringify(resolutions) });
             const errors = result.result?.errors || [];
             if (errors.length) {
-                const details = errors.map((error) => error.message).filter(Boolean).join(' ');
+                const details = [...new Set(errors.map((error) => error.message).filter(Boolean))].join(' ');
                 const errorMessage = config.strings.migrationErrors
                     .replace('%1$d', errors.length)
                     .replace('%2$s', details);

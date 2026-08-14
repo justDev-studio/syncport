@@ -205,6 +205,7 @@ final class ManifestBuilder
                 'sha256' => $hasLocalFile
                     ? hash_file('sha256', $path)
                     : '',
+                'checksum_verified' => $hasLocalFile,
             ];
         }
         return $items;

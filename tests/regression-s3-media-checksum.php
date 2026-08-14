@@ -94,4 +94,22 @@ if (($media[0]['sha256'] ?? null) !== '') {
     exit(1);
 }
 
-echo "S3 media imports without a stale checksum mismatch.\n";
+$legacyMedia = $media;
+$legacyMedia[0]['sha256'] = hash('sha256', 'old-local-object');
+unset($legacyMedia[0]['checksum_verified']);
+$legacyResult = (new JustDev\SyncPort\Migration\MediaImporter())->import($legacyMedia);
+if ($legacyResult['errors'] !== []) {
+    fwrite(STDERR, $legacyResult['errors'][0]['message'] . PHP_EOL);
+    exit(1);
+}
+
+$verifiedMedia = $media;
+$verifiedMedia[0]['sha256'] = hash('sha256', 'old-local-object');
+$verifiedMedia[0]['checksum_verified'] = true;
+$verifiedResult = (new JustDev\SyncPort\Migration\MediaImporter())->import($verifiedMedia);
+if (($verifiedResult['errors'][0]['message'] ?? '') !== 'The downloaded media checksum does not match the manifest.') {
+    fwrite(STDERR, "Verified media checksum mismatches must still fail.\n");
+    exit(1);
+}
+
+echo "S3 and legacy media import without a stale checksum mismatch.\n";

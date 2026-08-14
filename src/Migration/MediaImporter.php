@@ -13,7 +13,9 @@ final class MediaImporter
         $errors = [];
         foreach ($items as $item) {
             $sourceId = absint($item['source_id'] ?? 0);
-            $targetId = $this->find((string) ($item['uuid'] ?? ''), (string) ($item['sha256'] ?? ''));
+            $checksumVerified = ($item['checksum_verified'] ?? false) === true;
+            $sha256 = $checksumVerified ? sanitize_text_field((string) ($item['sha256'] ?? '')) : '';
+            $targetId = $this->find((string) ($item['uuid'] ?? ''), $sha256);
             if (!$targetId) {
                 $targetId = $this->download($item);
             }
@@ -21,7 +23,6 @@ final class MediaImporter
                 $errors[] = ['source_id' => $sourceId, 'message' => $targetId->get_error_message()];
                 continue;
             }
-            $sha256 = sanitize_text_field((string) ($item['sha256'] ?? ''));
             if ($sha256 === '') {
                 $targetPath = get_attached_file($targetId);
                 if (is_string($targetPath) && is_readable($targetPath)) {
@@ -74,7 +75,9 @@ final class MediaImporter
             return $temp;
         }
 
-        $expected = (string) ($item['sha256'] ?? '');
+        $expected = ($item['checksum_verified'] ?? false) === true
+            ? sanitize_text_field((string) ($item['sha256'] ?? ''))
+            : '';
         if ($expected !== '' && !hash_equals($expected, hash_file('sha256', $temp))) {
             wp_delete_file($temp);
             return new \WP_Error('syncport_media_checksum', __('The downloaded media checksum does not match the manifest.', 'syncport'));
