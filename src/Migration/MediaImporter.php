@@ -21,8 +21,17 @@ final class MediaImporter
                 $errors[] = ['source_id' => $sourceId, 'message' => $targetId->get_error_message()];
                 continue;
             }
+            $sha256 = sanitize_text_field((string) ($item['sha256'] ?? ''));
+            if ($sha256 === '') {
+                $targetPath = get_attached_file($targetId);
+                if (is_string($targetPath) && is_readable($targetPath)) {
+                    $sha256 = hash_file('sha256', $targetPath);
+                }
+            }
             update_post_meta($targetId, '_syncport_uuid', sanitize_text_field((string) ($item['uuid'] ?? '')));
-            update_post_meta($targetId, '_syncport_sha256', sanitize_text_field((string) ($item['sha256'] ?? '')));
+            if ($sha256 !== '') {
+                update_post_meta($targetId, '_syncport_sha256', $sha256);
+            }
             $map[$sourceId] = (int) $targetId;
         }
         return ['map' => $map, 'errors' => $errors];

@@ -21,7 +21,7 @@ final class ConflictAnalyzer
                 $ready[] = ['uuid' => $item['uuid'] ?? '', 'action' => 'create'];
                 continue;
             }
-            $localHash = $this->localHash($match);
+            $localHash = $this->localHash($match, !empty($manifest['include_media']));
             if (hash_equals((string) ($item['hash'] ?? ''), $localHash)) {
                 $ready[] = ['uuid' => $item['uuid'] ?? '', 'action' => 'skip', 'target_id' => $match];
                 continue;
@@ -70,13 +70,14 @@ final class ConflictAnalyzer
         return $slugMatch ? (int) $slugMatch->ID : 0;
     }
 
-    private function localHash(int $postId): string
+    private function localHash(int $postId, bool $includeMedia): string
     {
         $postType = get_post_type($postId);
         $manifest = (new ManifestBuilder())->build([
             'scope' => 'content',
             'post_ids' => [$postId],
             'post_types' => [$postType ?: 'post'],
+            'include_media' => $includeMedia,
         ]);
         return (string) ($manifest['posts'][0]['hash'] ?? '');
     }

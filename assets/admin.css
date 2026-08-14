@@ -125,6 +125,35 @@ textarea[name="connection_info"] {
     justify-content: space-between;
 }
 
+.syncport__progress {
+    display: grid;
+    gap: 12px;
+}
+
+.syncport__progress[hidden] {
+    display: none;
+}
+
+.syncport__progress-header {
+    align-items: center;
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+}
+
+.syncport__progress progress {
+    height: 18px;
+    width: 100%;
+}
+
+.syncport__progress.is-complete {
+    border-left: 4px solid #00a32a;
+}
+
+.syncport__progress.is-error {
+    border-left: 4px solid #d63638;
+}
+
 #syncport-notice {
     bottom: 20px;
     max-width: 520px;

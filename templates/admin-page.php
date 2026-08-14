@@ -106,6 +106,13 @@
 
             <p class="submit"><button class="button button-primary" type="submit" <?php disabled(!$connections); ?>><?php esc_html_e('Run preflight', 'syncport'); ?></button></p>
         </form>
+        <div id="syncport-progress" class="syncport__card syncport__progress" role="status" aria-live="polite" aria-atomic="true" hidden>
+            <div class="syncport__progress-header">
+                <strong id="syncport-progress-label"><?php esc_html_e('Preparing migration…', 'syncport'); ?></strong>
+                <span id="syncport-progress-state"><?php esc_html_e('In progress', 'syncport'); ?></span>
+            </div>
+            <progress id="syncport-progress-bar" max="100"><?php esc_html_e('In progress', 'syncport'); ?></progress>
+        </div>
         <div id="syncport-preflight" class="syncport__card" hidden></div>
     </section>
 

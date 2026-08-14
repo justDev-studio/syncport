@@ -3,6 +3,10 @@
     const notice = document.querySelector('#syncport-notice');
     const entitySelect = document.querySelector('#syncport-post-ids');
     const migrationForm = document.querySelector('#syncport-migration-form');
+    const progressRegion = document.querySelector('#syncport-progress');
+    const progressBar = document.querySelector('#syncport-progress-bar');
+    const progressLabel = document.querySelector('#syncport-progress-label');
+    const progressState = document.querySelector('#syncport-progress-state');
     let readyResolutions = {};
     let entityRequest = 0;
 
@@ -37,6 +41,20 @@
         paragraph.textContent = text;
         wrapper.append(paragraph);
         notice.replaceChildren(wrapper);
+    };
+
+    const updateProgress = (label, state = 'running') => {
+        if (!progressRegion || !progressBar || !progressLabel || !progressState) return;
+        progressRegion.hidden = false;
+        progressRegion.classList.toggle('is-complete', state === 'complete');
+        progressRegion.classList.toggle('is-error', state === 'error');
+        progressLabel.textContent = label;
+        progressState.textContent = state === 'complete' ? '100%' : state === 'error' ? config.strings.operationFailed : config.strings.working;
+        if (state === 'complete') {
+            progressBar.value = 100;
+        } else {
+            progressBar.removeAttribute('value');
+        }
     };
 
     document.querySelectorAll('[data-syncport-tab]').forEach((tab) => {
@@ -90,12 +108,14 @@
         });
     });
 
-    const bindForm = (selector, action, onSuccess = () => window.location.reload()) => {
+    const bindForm = (selector, action, onSuccess = () => window.location.reload(), progress = null) => {
         document.querySelector(selector)?.addEventListener('submit', async (event) => {
             event.preventDefault();
             const form = event.currentTarget;
             const submit = form.querySelector('[type="submit"]');
             submit.disabled = true;
+            form.setAttribute('aria-busy', 'true');
+            if (progress) updateProgress(progress.start);
             try {
                 const data = Object.fromEntries(new FormData(form));
                 form.querySelectorAll('select[multiple]').forEach((select) => {
@@ -107,10 +127,13 @@
                 });
                 const result = await request(action, data);
                 onSuccess(result);
+                if (progress) updateProgress(progress.complete, 'complete');
             } catch (error) {
                 message(error.message, 'error');
+                if (progress) updateProgress(error.message, 'error');
             } finally {
                 submit.disabled = false;
+                form.removeAttribute('aria-busy');
             }
         });
     };
@@ -206,7 +229,10 @@
         const target = document.querySelector('#syncport-preflight');
         const preflight = result.preflight;
         const conflicts = preflight.conflicts || [];
-        readyResolutions = Object.fromEntries((preflight.ready || []).map((item) => [item.uuid, item.action]));
+        readyResolutions = {
+            ...Object.fromEntries((preflight.ready || []).map((item) => [item.uuid, item.action])),
+            ...Object.fromEntries(conflicts.map((item) => [item.uuid, 'replace'])),
+        };
         const blocked = (preflight.compatible || []).length > 0;
         const summary = config.strings.summary
             .replace('%1$d', Number(preflight.summary.posts))
@@ -219,10 +245,13 @@
             <p>${escapeHtml(summary)}</p>
             ${(preflight.compatible || []).map((issue) => `<div class="notice notice-error inline"><p>${escapeHtml(issue)}</p></div>`).join('')}
             <div class="syncport__conflicts">
-                ${conflicts.map((conflict) => `<label><span>${escapeHtml(conflict.source_title)} → ${escapeHtml(conflict.target_title)}</span><select data-resolution="${escapeHtml(conflict.uuid)}"><option value="">${escapeHtml(config.strings.choose)}</option><option value="replace">${escapeHtml(config.strings.replace)}</option><option value="skip">${escapeHtml(config.strings.skip)}</option><option value="duplicate">${escapeHtml(config.strings.duplicate)}</option></select></label>`).join('')}
+                ${conflicts.map((conflict) => `<label><span>${escapeHtml(conflict.source_title)} → ${escapeHtml(conflict.target_title)}</span><select data-resolution="${escapeHtml(conflict.uuid)}"><option value="replace" selected>${escapeHtml(config.strings.replace)}</option><option value="skip">${escapeHtml(config.strings.skip)}</option><option value="duplicate">${escapeHtml(config.strings.duplicate)}</option></select></label>`).join('')}
             </div>
             <button class="button button-primary" type="button" data-apply-operation="${escapeHtml(result.operation)}" ${blocked ? 'disabled' : ''}>${escapeHtml(config.strings.apply)}</button>`;
         target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, {
+        start: config.strings.preparingPreflight,
+        complete: config.strings.preflightComplete,
     });
 
     document.addEventListener('click', async (event) => {
@@ -235,13 +264,28 @@
             return;
         }
         button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        updateProgress(config.strings.applyingMigration);
         try {
             const result = await request('syncport_apply', { operation: button.dataset.applyOperation, resolutions: JSON.stringify(resolutions) });
-            message(config.strings.migrationStatus.replace('%s', result.status));
+            const errors = result.result?.errors || [];
+            if (errors.length) {
+                const details = errors.map((error) => error.message).filter(Boolean).join(' ');
+                const errorMessage = config.strings.migrationErrors
+                    .replace('%1$d', errors.length)
+                    .replace('%2$s', details);
+                message(errorMessage, 'error');
+                updateProgress(errorMessage, 'error');
+            } else {
+                message(config.strings.migrationStatus.replace('%s', result.status));
+                updateProgress(config.strings.migrationComplete, 'complete');
+            }
             button.remove();
         } catch (error) {
             message(error.message, 'error');
+            updateProgress(error.message, 'error');
             button.disabled = false;
+            button.removeAttribute('aria-busy');
         }
     });
 })();

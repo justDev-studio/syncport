@@ -34,11 +34,22 @@ final class RemoteClient
         }
 
         $status = wp_remote_retrieve_response_code($response);
-        $decoded = json_decode(wp_remote_retrieve_body($response), true);
-        if ($status < 200 || $status >= 300 || !is_array($decoded)) {
-            return new WP_Error('syncport_remote_error', __('The remote site returned an invalid response.', 'syncport'), [
+        $responseBody = wp_remote_retrieve_body($response);
+        $decoded = json_decode($responseBody, true);
+        if ($status < 200 || $status >= 300) {
+            $remoteCode = is_array($decoded) ? sanitize_key((string) ($decoded['code'] ?? '')) : '';
+            $remoteMessage = is_array($decoded) ? sanitize_text_field((string) ($decoded['message'] ?? '')) : '';
+            $message = $remoteMessage !== ''
+                ? $remoteMessage
+                : sprintf(__('The remote site returned HTTP status %d.', 'syncport'), $status);
+
+            return new WP_Error($remoteCode ?: 'syncport_remote_error', $message, [
                 'status' => $status,
-                'body' => wp_remote_retrieve_body($response),
+            ]);
+        }
+        if (!is_array($decoded)) {
+            return new WP_Error('syncport_invalid_remote_response', __('The remote site returned invalid JSON.', 'syncport'), [
+                'status' => $status,
             ]);
         }
 

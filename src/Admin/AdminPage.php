@@ -56,8 +56,19 @@ final class AdminPage
         if ($hook !== 'tools_page_syncport') {
             return;
         }
-        wp_enqueue_style('syncport-admin', SYNCPORT_URL . 'assets/admin.css', [], SYNCPORT_VERSION);
-        wp_enqueue_script('syncport-admin', SYNCPORT_URL . 'assets/admin.js', [], SYNCPORT_VERSION, true);
+        wp_enqueue_style(
+            'syncport-admin',
+            SYNCPORT_URL . 'assets/admin.css',
+            [],
+            $this->assetVersion('assets/admin.css')
+        );
+        wp_enqueue_script(
+            'syncport-admin',
+            SYNCPORT_URL . 'assets/admin.js',
+            [],
+            $this->assetVersion('assets/admin.js'),
+            true
+        );
         wp_localize_script('syncport-admin', 'syncportAdmin', [
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce('syncport_admin'),
@@ -80,6 +91,12 @@ final class AdminPage
                 'selectEntity' => __('Select one or more entities, or leave empty to migrate all.', 'syncport'),
                 'connectionCopied' => __('Connection info copied.', 'syncport'),
                 'copyFailed' => __('Could not copy connection info.', 'syncport'),
+                'preparingPreflight' => __('Analyzing the selected data and checking the remote site…', 'syncport'),
+                'preflightComplete' => __('Preflight complete. Review the results before applying the migration.', 'syncport'),
+                'applyingMigration' => __('Applying the migration on the target site…', 'syncport'),
+                'migrationComplete' => __('Migration completed.', 'syncport'),
+                'migrationErrors' => __('Migration completed with %1$d error(s): %2$s', 'syncport'),
+                'operationFailed' => __('The operation failed.', 'syncport'),
             ],
         ]);
     }
@@ -282,6 +299,12 @@ final class AdminPage
     private function connectionInfo(): string
     {
         return home_url() . "\n" . (string) get_option('syncport_api_key');
+    }
+
+    private function assetVersion(string $relativePath): string
+    {
+        $hash = hash_file('sha256', SYNCPORT_PATH . $relativePath);
+        return $hash ? SYNCPORT_VERSION . '.' . substr($hash, 0, 12) : SYNCPORT_VERSION;
     }
 
     private function guard(): void

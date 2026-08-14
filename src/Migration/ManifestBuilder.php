@@ -25,6 +25,7 @@ final class ManifestBuilder
                 'syncport' => SYNCPORT_VERSION,
             ],
             'scope' => $scope,
+            'include_media' => !empty($request['include_media']),
             'replace' => [home_url() => (string) ($request['target_url'] ?? '')],
         ];
 
@@ -90,11 +91,12 @@ final class ManifestBuilder
         }
 
         $posts = get_posts($args);
-        return array_map(fn (WP_Post $post): array => $this->serializePost($post), $posts);
+        $includeMedia = !empty($request['include_media']);
+        return array_map(fn (WP_Post $post): array => $this->serializePost($post, $includeMedia), $posts);
     }
 
     /** @return array<string, mixed> */
-    private function serializePost(WP_Post $post): array
+    private function serializePost(WP_Post $post, bool $includeMedia): array
     {
         $uuid = (string) get_post_meta($post->ID, self::UUID_META, true);
         if ($uuid === '') {
@@ -120,7 +122,7 @@ final class ManifestBuilder
             ], $assigned);
         }
 
-        $media = $this->media($post, $meta);
+        $media = $includeMedia ? $this->media($post, $meta) : [];
         $data = [
             'uuid' => $uuid,
             'source_id' => $post->ID,
@@ -175,18 +177,19 @@ final class ManifestBuilder
         if (preg_match_all('/wp-image-(\d+)/', $post->post_content, $matches)) {
             $ids = array_merge($ids, array_map('absint', $matches[1]));
         }
-        array_walk_recursive($meta, static function ($value) use (&$ids): void {
-            if (is_numeric($value) && get_post_type((int) $value) === 'attachment') {
-                $ids[] = (int) $value;
-            }
-        });
+        $this->collectAttachmentIds($meta, $ids);
 
         $items = [];
         foreach (array_unique($ids) as $id) {
             $path = get_attached_file($id);
-            if (!$path || !is_readable($path)) {
+            $hasLocalFile = is_string($path) && $path !== '' && is_readable($path);
+            $url = wp_get_attachment_url($id);
+            if (!$hasLocalFile && !$url) {
                 continue;
             }
+            $metadata = wp_get_attachment_metadata($id);
+            $urlPath = $url ? (string) wp_parse_url($url, PHP_URL_PATH) : '';
+            $filename = $hasLocalFile ? basename($path) : basename($urlPath);
             $uuid = (string) get_post_meta($id, self::UUID_META, true);
             if ($uuid === '') {
                 $uuid = wp_generate_uuid4();
@@ -195,14 +198,34 @@ final class ManifestBuilder
             $items[] = [
                 'uuid' => $uuid,
                 'source_id' => $id,
-                'filename' => basename($path),
+                'filename' => sanitize_file_name($filename ?: 'attachment-' . $id),
                 'mime_type' => get_post_mime_type($id),
-                'url' => wp_get_attachment_url($id),
-                'size' => filesize($path),
-                'sha256' => hash_file('sha256', $path),
+                'url' => $url,
+                'size' => $hasLocalFile ? filesize($path) : (int) ($metadata['filesize'] ?? 0),
+                'sha256' => $hasLocalFile
+                    ? hash_file('sha256', $path)
+                    : (string) get_post_meta($id, '_syncport_sha256', true),
             ];
         }
         return $items;
+    }
+
+    /** @param mixed $value @param array<int, int> $ids */
+    private function collectAttachmentIds(mixed $value, array &$ids): void
+    {
+        if (is_string($value) && is_serialized($value)) {
+            $this->collectAttachmentIds(maybe_unserialize($value), $ids);
+            return;
+        }
+        if (is_array($value) || is_object($value)) {
+            foreach ((array) $value as $item) {
+                $this->collectAttachmentIds($item, $ids);
+            }
+            return;
+        }
+        if (is_numeric($value) && get_post_type((int) $value) === 'attachment') {
+            $ids[] = (int) $value;
+        }
     }
 
     /** @param array<int, mixed> $names @return array<string, mixed> */
@@ -242,7 +265,8 @@ final class ManifestBuilder
         $mediaMap = [];
         $canonicalMedia = [];
         foreach ((array) ($data['media'] ?? []) as $media) {
-            $mediaMap[(int) $media['source_id']] = 'media:' . (string) $media['sha256'];
+            $identity = (string) ($media['sha256'] ?: $media['uuid']);
+            $mediaMap[(int) $media['source_id']] = 'media:' . $identity;
             $canonicalMedia[] = [
                 'uuid' => $media['uuid'],
                 'sha256' => $media['sha256'],
