@@ -12,6 +12,7 @@ use JustDev\SyncPort\Infrastructure\OperationRepository;
 use JustDev\SyncPort\Migration\ConflictAnalyzer;
 use JustDev\SyncPort\Migration\ManifestBuilder;
 use JustDev\SyncPort\Migration\PostImporter;
+use JustDev\SyncPort\Migration\RemoteMedia;
 use JustDev\SyncPort\Security\RequestAuthenticator;
 use JustDev\SyncPort\Security\RequestSigner;
 
@@ -46,6 +47,7 @@ final class Plugin
         $signer = new RequestSigner();
         $authenticator = new RequestAuthenticator();
 
+        (new RemoteMedia())->register();
         (new RemoteController($authenticator, $builder, $analyzer, $importer))->register();
 
         if (is_admin()) {

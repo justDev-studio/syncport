@@ -184,10 +184,13 @@ final class ManifestBuilder
             $path = get_attached_file($id);
             $hasLocalFile = is_string($path) && $path !== '' && is_readable($path);
             $url = wp_get_attachment_url($id);
+            $isLocalMediaUrl = $this->isLocalMediaUrl((string) $url);
+            $checksumVerified = $hasLocalFile && $isLocalMediaUrl;
             if (!$hasLocalFile && !$url) {
                 continue;
             }
             $metadata = wp_get_attachment_metadata($id);
+            $attachment = get_post($id);
             $urlPath = $url ? (string) wp_parse_url($url, PHP_URL_PATH) : '';
             $filename = $hasLocalFile ? basename($path) : basename($urlPath);
             $uuid = (string) get_post_meta($id, self::UUID_META, true);
@@ -201,14 +204,33 @@ final class ManifestBuilder
                 'filename' => sanitize_file_name($filename ?: 'attachment-' . $id),
                 'mime_type' => get_post_mime_type($id),
                 'url' => $url,
+                'storage' => $isLocalMediaUrl ? 'local' : 'remote',
                 'size' => $hasLocalFile ? filesize($path) : (int) ($metadata['filesize'] ?? 0),
-                'sha256' => $hasLocalFile
+                'sha256' => $checksumVerified
                     ? hash_file('sha256', $path)
                     : '',
-                'checksum_verified' => $hasLocalFile,
+                'checksum_verified' => $checksumVerified,
+                'attached_file' => (string) get_post_meta($id, '_wp_attached_file', true),
+                'metadata' => is_array($metadata) ? $metadata : [],
+                'alt' => (string) get_post_meta($id, '_wp_attachment_image_alt', true),
+                'post' => $attachment ? [
+                    'post_title' => $attachment->post_title,
+                    'post_name' => $attachment->post_name,
+                    'post_excerpt' => $attachment->post_excerpt,
+                    'post_content' => $attachment->post_content,
+                    'post_date' => $attachment->post_date,
+                    'post_date_gmt' => $attachment->post_date_gmt,
+                ] : [],
             ];
         }
         return $items;
+    }
+
+    private function isLocalMediaUrl(string $url): bool
+    {
+        $mediaHost = strtolower((string) wp_parse_url($url, PHP_URL_HOST));
+        $siteHost = strtolower((string) wp_parse_url(home_url(), PHP_URL_HOST));
+        return $mediaHost !== '' && $siteHost !== '' && $mediaHost === $siteHost;
     }
 
     /** @param mixed $value @param array<int, int> $ids */
