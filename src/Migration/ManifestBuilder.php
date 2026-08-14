@@ -204,7 +204,7 @@ final class ManifestBuilder
                 'size' => $hasLocalFile ? filesize($path) : (int) ($metadata['filesize'] ?? 0),
                 'sha256' => $hasLocalFile
                     ? hash_file('sha256', $path)
-                    : (string) get_post_meta($id, '_syncport_sha256', true),
+                    : '',
             ];
         }
         return $items;
