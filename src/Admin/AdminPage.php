@@ -195,7 +195,7 @@ final class AdminPage
             if (is_wp_error($handshake)) {
                 wp_send_json_error(['message' => $handshake->get_error_message()], 502);
             }
-            if (version_compare((string) ($handshake['syncport_version'] ?? '0.0.0'), '0.2.0', '<')) {
+            if (version_compare((string) ($handshake['syncport_version'] ?? '0.0.0'), '0.3.0', '<')) {
                 wp_send_json_error(['message' => __('Update SyncPort on both sites before migrating database tables.', 'syncport')], 409);
             }
         }
@@ -292,7 +292,8 @@ final class AdminPage
                     $chunk,
                     (string) ($request['table_mode'] ?? 'replace'),
                     (string) ($manifest['source']['table_prefix'] ?? ''),
-                    (array) ($manifest['replace'] ?? [])
+                    (array) ($manifest['replace'] ?? []),
+                    $tables
                 );
             } else {
                 $chunk = $this->database->exportChunk((string) ($table['name'] ?? ''), $offset);
@@ -307,6 +308,7 @@ final class AdminPage
                     'mode' => (string) ($request['table_mode'] ?? 'replace'),
                     'source_prefix' => (string) ($manifest['source']['table_prefix'] ?? ''),
                     'replace' => (array) ($manifest['replace'] ?? []),
+                    'selected_tables' => $tables,
                 ]);
             }
             if (is_wp_error($applied)) {
@@ -323,6 +325,23 @@ final class AdminPage
         }
 
         $complete = (int) $state['table_index'] >= count($tables);
+        if ($complete && ($request['table_mode'] ?? 'replace') === 'replace') {
+            $sourcePrefix = (string) ($manifest['source']['table_prefix'] ?? '');
+            if (($operation['direction'] ?? '') === 'pull') {
+                $finalized = $this->database->finalizeReplace($uuid, $tables, $sourcePrefix);
+            } else {
+                $connection = $this->connection((string) $operation['connection_id']);
+                $finalized = $this->client->post($connection, 'database-finalize', [
+                    'operation' => $uuid,
+                    'tables' => $tables,
+                    'source_prefix' => $sourcePrefix,
+                ]);
+            }
+            if (is_wp_error($finalized)) {
+                $this->fail($uuid, $finalized->get_error_message());
+            }
+            $state['finalized'] = true;
+        }
         $total = (int) $state['total'];
         $state['percent'] = $complete ? 100 : ($total > 0 ? min(99, (int) floor((int) $state['processed'] * 100 / $total)) : 0);
         $result = ['created' => [], 'updated' => [], 'skipped' => [], 'errors' => [], 'database' => $state];
@@ -386,6 +405,7 @@ final class AdminPage
             ),
             static fn (string $table): bool => !in_array($table, [$wpdb->prefix . 'syncport_operations', $wpdb->prefix . 'syncport_chunks'], true)
                 && !str_starts_with($table, $wpdb->prefix . 'syncport_bak_')
+                && !str_starts_with($table, $wpdb->prefix . 'syncport_tmp_')
         ));
     }
 

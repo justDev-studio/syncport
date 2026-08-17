@@ -34,7 +34,11 @@ final class RemoteController
                     'permission_callback' => '__return_true',
                 ]);
             }
-            foreach (['database-chunk' => 'databaseChunk', 'database-apply-chunk' => 'databaseApplyChunk'] as $route => $callback) {
+            foreach ([
+                'database-chunk' => 'databaseChunk',
+                'database-apply-chunk' => 'databaseApplyChunk',
+                'database-finalize' => 'databaseFinalize',
+            ] as $route => $callback) {
                 register_rest_route('syncport/v1', '/' . $route, [
                     'methods' => 'POST',
                     'callback' => [$this, $callback],
@@ -155,7 +159,25 @@ final class RemoteController
             (array) ($payload['chunk'] ?? []),
             sanitize_key((string) ($payload['mode'] ?? 'replace')),
             (string) ($payload['source_prefix'] ?? ''),
-            (array) ($payload['replace'] ?? [])
+            (array) ($payload['replace'] ?? []),
+            (array) ($payload['selected_tables'] ?? [])
+        );
+        return is_wp_error($result) ? $result : new WP_REST_Response($result);
+    }
+
+    public function databaseFinalize(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        if (is_wp_error($verified = $this->authenticator->verify($request))) {
+            return $verified;
+        }
+        if (!get_option('syncport_allow_push', false)) {
+            return new WP_Error('syncport_push_disabled', __('Push requests are disabled on this site.', 'syncport'), ['status' => 403]);
+        }
+        $payload = $this->payload($request);
+        $result = $this->database->finalizeReplace(
+            sanitize_text_field((string) ($payload['operation'] ?? '')),
+            (array) ($payload['tables'] ?? []),
+            (string) ($payload['source_prefix'] ?? '')
         );
         return is_wp_error($result) ? $result : new WP_REST_Response($result);
     }

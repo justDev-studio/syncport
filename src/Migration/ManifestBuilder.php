@@ -283,8 +283,11 @@ final class ManifestBuilder
             ),
             static fn (string $table): bool => !in_array($table, [$wpdb->prefix . 'syncport_operations', $wpdb->prefix . 'syncport_chunks'], true)
                 && !str_starts_with($table, $wpdb->prefix . 'syncport_bak_')
+                && !str_starts_with($table, $wpdb->prefix . 'syncport_tmp_')
         ));
-        $selected = $selected === [] ? $allowed : array_intersect(array_map('sanitize_text_field', $selected), $allowed);
+        $selected = $selected === []
+            ? array_values(array_filter($allowed, static fn (string $table): bool => str_starts_with($table, (string) $wpdb->prefix)))
+            : array_intersect(array_map('sanitize_text_field', $selected), $allowed);
         $tables = [];
         foreach ($selected as $table) {
             $count = (int) $wpdb->get_var("SELECT COUNT(*) FROM `" . esc_sql($table) . "`");

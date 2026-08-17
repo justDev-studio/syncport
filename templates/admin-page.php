@@ -91,14 +91,15 @@
                     <button class="button" type="button" data-select-tables="all"><?php esc_html_e('Select all', 'syncport'); ?></button>
                     <button class="button" type="button" data-select-tables="none"><?php esc_html_e('Clear', 'syncport'); ?></button>
                 </div>
-                <select class="syncport__tables" name="tables[]" multiple size="10">
+                <select class="syncport__tables" name="tables[]" multiple size="10" aria-describedby="syncport-tables-hint">
                     <?php foreach ($tables as $table) : ?>
                         <option value="<?php echo esc_attr($table); ?>"><?php echo esc_html($table); ?></option>
                     <?php endforeach; ?>
                 </select>
+                <small id="syncport-tables-hint"><?php esc_html_e('Leave all tables unselected to migrate the full WordPress database. Select tables only for a partial migration.', 'syncport'); ?></small>
                 <div class="syncport__choices">
-                    <label><input type="radio" name="table_mode" value="replace" checked> <?php esc_html_e('Replace selected tables', 'syncport'); ?></label>
-                    <label><input type="radio" name="table_mode" value="merge"> <?php esc_html_e('Merge selected tables', 'syncport'); ?></label>
+                    <label><input type="radio" name="table_mode" value="replace" checked> <?php esc_html_e('Replace full database or selected tables', 'syncport'); ?></label>
+                    <label><input type="radio" name="table_mode" value="merge"> <?php esc_html_e('Merge full database or selected tables', 'syncport'); ?></label>
                     <label><input type="checkbox" name="include_media" value="1"> <?php esc_html_e('Include media library', 'syncport'); ?></label>
                     <label><input type="checkbox" name="mirror_media" value="1"> <?php esc_html_e('Mirror media library and remove extra local files', 'syncport'); ?></label>
                 </div>

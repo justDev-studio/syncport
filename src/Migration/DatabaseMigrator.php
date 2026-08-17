@@ -8,6 +8,9 @@ final class DatabaseMigrator
 {
     public const CHUNK_SIZE = 500;
 
+    private const MAX_CHUNK_BYTES = 1048576;
+    private const MAX_STATEMENT_BYTES = 262144;
+
     /** @return array<string, mixed>|\WP_Error */
     public function exportChunk(string $table, int $offset, int $limit = self::CHUNK_SIZE): array|\WP_Error
     {
@@ -25,7 +28,7 @@ final class DatabaseMigrator
         }
 
         $offset = max(0, $offset);
-        $limit = max(1, min(500, $limit));
+        $limit = max(1, min(self::CHUNK_SIZE, $limit));
         $identifier = $this->identifier($table);
         $createRow = $wpdb->get_row("SHOW CREATE TABLE `{$identifier}`", ARRAY_N);
         if (!is_array($createRow) || empty($createRow[1])) {
@@ -43,25 +46,37 @@ final class DatabaseMigrator
             return new \WP_Error('syncport_table_export', __('The source table rows could not be read.', 'syncport'));
         }
 
-        $count = count($rows);
+        $limitedRows = [];
+        $bytes = 0;
+        foreach ($rows as $row) {
+            $rowBytes = strlen(serialize($row));
+            if ($limitedRows !== [] && $bytes + $rowBytes > self::MAX_CHUNK_BYTES) {
+                break;
+            }
+            $limitedRows[] = $row;
+            $bytes += $rowBytes;
+        }
+
+        $count = count($limitedRows);
         return [
             'table' => $table,
             'create_sql' => (string) $createRow[1],
             'offset' => $offset,
             'next_offset' => $offset + $count,
-            'rows' => $rows,
-            'done' => $count < $limit,
+            'rows' => $limitedRows,
+            'done' => $count === count($rows) && count($rows) < $limit,
         ];
     }
 
-    /** @param array<string, mixed> $table @param array<string, mixed> $chunk @param array<string, string> $replace @return array<string, mixed>|\WP_Error */
+    /** @param array<string, mixed> $table @param array<string, mixed> $chunk @param array<string, string> $replace @param array<int, array<string, mixed>> $selectedTables @return array<string, mixed>|\WP_Error */
     public function applyChunk(
         string $operation,
         array $table,
         array $chunk,
         string $mode,
         string $sourcePrefix,
-        array $replace = []
+        array $replace = [],
+        array $selectedTables = []
     ): array|\WP_Error {
         global $wpdb;
 
@@ -73,7 +88,12 @@ final class DatabaseMigrator
             return new \WP_Error('syncport_table_mode', __('The selected database merge mode is invalid.', 'syncport'));
         }
 
-        $targetTable = $this->targetTable($sourceTable, $sourcePrefix, (string) $wpdb->prefix);
+        $targetPrefix = (string) $wpdb->prefix;
+        $targetTable = $this->targetTable($sourceTable, $sourcePrefix, $targetPrefix);
+        $writeTable = $mode === 'replace'
+            ? $this->stagingTable($operation, $targetTable, $targetPrefix)
+            : $targetTable;
+        $targetExisted = $this->tableExists($targetTable);
         $offset = max(0, (int) ($chunk['offset'] ?? 0));
         $chunkHash = hash('sha256', (string) wp_json_encode($chunk));
         $receipt = $this->receipt($operation, $targetTable, $offset, $chunkHash);
@@ -83,36 +103,39 @@ final class DatabaseMigrator
         if (is_array($receipt)) {
             return $receipt;
         }
+
         if ($offset === 0) {
-            $prepared = $this->prepareTarget($operation, $targetTable, (string) ($chunk['create_sql'] ?? ''), $mode);
+            $prepared = $this->prepareTarget(
+                $targetTable,
+                $writeTable,
+                (string) ($chunk['create_sql'] ?? ''),
+                $mode,
+                $sourcePrefix,
+                $operation,
+                $selectedTables
+            );
             if (is_wp_error($prepared)) {
                 return $prepared;
             }
-        } elseif (!$this->tableExists($targetTable)) {
-            return new \WP_Error('syncport_target_table_missing', __('The target table is missing while applying a database chunk.', 'syncport'));
+        } elseif (!$this->tableExists($writeTable)) {
+            return new \WP_Error('syncport_target_table_missing', __('The database staging table is missing.', 'syncport'));
         }
 
         if ($wpdb->query('START TRANSACTION') === false) {
             return new \WP_Error('syncport_table_transaction', $wpdb->last_error ?: __('The database chunk transaction could not be started.', 'syncport'));
         }
 
-        $written = 0;
+        $rows = [];
         foreach ((array) ($chunk['rows'] ?? []) as $row) {
-            if (!is_array($row)) {
+            if (!is_array($row) || $this->preservesTargetRow($targetTable, $row)) {
                 continue;
             }
-            if ($this->preservesTargetRow($targetTable, $row)) {
-                continue;
-            }
-            $row = $this->rewriteRow($row, $sourceTable, $sourcePrefix, (string) $wpdb->prefix, $replace);
-            if ($wpdb->replace($targetTable, $row) === false) {
-                $wpdb->query('ROLLBACK');
-                return new \WP_Error(
-                    'syncport_table_write',
-                    $wpdb->last_error ?: __('A database row could not be written to the target table.', 'syncport')
-                );
-            }
-            $written++;
+            $rows[] = $this->rewriteRow($row, $sourceTable, $sourcePrefix, $targetPrefix, $replace);
+        }
+        $written = $this->writeRows($writeTable, $rows);
+        if (is_wp_error($written)) {
+            $wpdb->query('ROLLBACK');
+            return $written;
         }
 
         $result = [
@@ -120,6 +143,7 @@ final class DatabaseMigrator
             'written' => $written,
             'next_offset' => max($offset, (int) ($chunk['next_offset'] ?? $offset + $written)),
             'done' => !empty($chunk['done']),
+            'target_existed' => $offset === 0 ? $targetExisted : null,
         ];
         if (!$wpdb->insert($this->receiptTable(), [
             'operation_uuid' => $operation,
@@ -139,9 +163,60 @@ final class DatabaseMigrator
         return $result;
     }
 
-    /** @return true|\WP_Error */
-    private function prepareTarget(string $operation, string $targetTable, string $createSql, string $mode): true|\WP_Error
+    /** @param array<int, array<string, mixed>> $tables @return array<string, int>|\WP_Error */
+    public function finalizeReplace(string $operation, array $tables, string $sourcePrefix): array|\WP_Error
     {
+        global $wpdb;
+
+        $renames = [];
+        foreach ($tables as $table) {
+            $sourceTable = (string) ($table['name'] ?? '');
+            if ($sourceTable === '') {
+                continue;
+            }
+            $targetPrefix = (string) $wpdb->prefix;
+            $targetTable = $this->targetTable($sourceTable, $sourcePrefix, $targetPrefix);
+            $stagingTable = $this->stagingTable($operation, $targetTable, $targetPrefix);
+            $backupTable = $this->backupTable($operation, $targetTable, $targetPrefix);
+            if (!$this->tableExists($stagingTable)) {
+                $firstChunk = $this->firstChunkResult($operation, $targetTable);
+                $newTableWasFinalized = is_array($firstChunk) && ($firstChunk['target_existed'] ?? null) === false;
+                if ($this->tableExists($targetTable) && ($this->tableExists($backupTable) || $newTableWasFinalized)) {
+                    continue;
+                }
+                return new \WP_Error('syncport_staging_table_missing', __('A staged database table is missing; the live database was not changed.', 'syncport'));
+            }
+            if ($this->tableExists($backupTable)) {
+                return new \WP_Error('syncport_backup_table_exists', __('A database backup from this operation already exists; the live database was not changed.', 'syncport'));
+            }
+            if ($this->tableExists($targetTable)) {
+                $renames[] = '`' . $this->identifier($targetTable) . '` TO `' . $this->identifier($backupTable) . '`';
+            }
+            $renames[] = '`' . $this->identifier($stagingTable) . '` TO `' . $this->identifier($targetTable) . '`';
+        }
+
+        if ($renames !== [] && $wpdb->query('RENAME TABLE ' . implode(', ', $renames)) === false) {
+            return new \WP_Error(
+                'syncport_table_finalize',
+                $wpdb->last_error ?: __('The staged database tables could not be activated; the live database was not changed.', 'syncport')
+            );
+        }
+        if (function_exists('wp_cache_flush')) {
+            wp_cache_flush();
+        }
+        return ['tables' => count($tables)];
+    }
+
+    /** @return true|\WP_Error */
+    private function prepareTarget(
+        string $targetTable,
+        string $writeTable,
+        string $createSql,
+        string $mode,
+        string $sourcePrefix,
+        string $operation,
+        array $selectedTables
+    ): true|\WP_Error {
         global $wpdb;
 
         if ($createSql === '') {
@@ -150,40 +225,59 @@ final class DatabaseMigrator
 
         $targetExists = $this->tableExists($targetTable);
         $preservedRows = $mode === 'replace' && $targetExists ? $this->preservedRows($targetTable) : [];
-        if ($targetExists) {
-            $backupTable = $this->backupTable($operation, $targetTable, (string) $wpdb->prefix);
-            if (!$this->tableExists($backupTable)) {
-                if ($wpdb->query("CREATE TABLE `{$this->identifier($backupTable)}` LIKE `{$this->identifier($targetTable)}`") === false
-                    || $wpdb->query("INSERT INTO `{$this->identifier($backupTable)}` SELECT * FROM `{$this->identifier($targetTable)}`") === false) {
-                    return new \WP_Error(
-                        'syncport_table_backup',
-                        $wpdb->last_error ?: __('The target table backup could not be created.', 'syncport')
-                    );
-                }
-            }
-        }
-
-        if ($mode === 'replace' && $targetExists
-            && $wpdb->query("DROP TABLE `{$this->identifier($targetTable)}`") === false) {
-            return new \WP_Error('syncport_table_drop', $wpdb->last_error ?: __('The target table could not be replaced.', 'syncport'));
+        if ($mode === 'replace' && $this->tableExists($writeTable)
+            && $wpdb->query("DROP TABLE `{$this->identifier($writeTable)}`") === false) {
+            return new \WP_Error('syncport_staging_table_drop', __('The previous database staging table could not be reset.', 'syncport'));
         }
 
         if ($mode === 'replace' || !$targetExists) {
+            $mappedCreateSql = $sourcePrefix === ''
+                ? $createSql
+                : str_replace('`' . $sourcePrefix, '`' . (string) $wpdb->prefix, $createSql);
+            $mappedCreateSql = preg_replace_callback(
+                '/\bREFERENCES\s+`([^`]+)`/i',
+                function (array $matches) use ($operation, $selectedTables, $sourcePrefix, $wpdb): string {
+                    $target = $this->targetTable((string) $matches[1], $sourcePrefix, (string) $wpdb->prefix);
+                    $selectedTargets = array_map(
+                        fn (string $table): string => $this->targetTable($table, $sourcePrefix, (string) $wpdb->prefix),
+                        array_map('strval', array_column($selectedTables, 'name'))
+                    );
+                    $selected = in_array($target, $selectedTargets, true);
+                    $referencedTable = $selected
+                        ? $this->stagingTable($operation, $target, (string) $wpdb->prefix)
+                        : $target;
+                    return 'REFERENCES `' . $this->identifier($referencedTable) . '`';
+                },
+                $mappedCreateSql
+            );
+            $constraintIndex = 0;
+            $mappedCreateSql = preg_replace_callback(
+                '/\bCONSTRAINT\s+`[^`]+`/i',
+                function () use ($operation, $writeTable, &$constraintIndex): string {
+                    $constraintIndex++;
+                    $name = 'syncport_' . substr(hash('sha256', $operation . '|' . $writeTable . '|' . $constraintIndex), 0, 32);
+                    return 'CONSTRAINT `' . $name . '`';
+                },
+                (string) $mappedCreateSql
+            );
             $targetCreateSql = preg_replace(
                 '/^CREATE TABLE(?: IF NOT EXISTS)?\s+`(?:``|[^`])+`/i',
-                'CREATE TABLE `' . $this->identifier($targetTable) . '`',
-                $createSql,
+                'CREATE TABLE `' . $this->identifier($writeTable) . '`',
+                $mappedCreateSql,
                 1,
                 $replacements
             );
-            if ($replacements !== 1 || !is_string($targetCreateSql) || $wpdb->query($targetCreateSql) === false) {
+            $wpdb->query('SET FOREIGN_KEY_CHECKS=0');
+            $created = $replacements === 1 && is_string($targetCreateSql) && $wpdb->query($targetCreateSql) !== false;
+            $wpdb->query('SET FOREIGN_KEY_CHECKS=1');
+            if (!$created) {
                 return new \WP_Error(
                     'syncport_table_create',
                     $wpdb->last_error ?: __('The target table schema could not be created.', 'syncport')
                 );
             }
             foreach ($preservedRows as $row) {
-                if ($wpdb->replace($targetTable, $row) === false) {
+                if ($wpdb->replace($writeTable, $row) === false) {
                     return new \WP_Error(
                         'syncport_table_preserve',
                         $wpdb->last_error ?: __('The target operational database rows could not be preserved.', 'syncport')
@@ -192,6 +286,42 @@ final class DatabaseMigrator
             }
         }
         return true;
+    }
+
+    /** @param array<int, array<string, mixed>> $rows @return int|\WP_Error */
+    private function writeRows(string $table, array $rows): int|\WP_Error
+    {
+        global $wpdb;
+        if ($rows === []) {
+            return 0;
+        }
+
+        $columns = array_keys($rows[0]);
+        $prefix = 'REPLACE INTO `' . $this->identifier($table) . '` (' . implode(', ', array_map(
+            fn (string $column): string => '`' . $this->identifier($column) . '`',
+            $columns
+        )) . ') VALUES ';
+        $values = [];
+        $bytes = strlen($prefix);
+        foreach ($rows as $row) {
+            $line = '(' . implode(', ', array_map(function (string $column) use ($row, $wpdb): string {
+                $value = $row[$column] ?? null;
+                return $value === null ? 'NULL' : (string) $wpdb->prepare('%s', (string) $value);
+            }, $columns)) . ')';
+            if ($values !== [] && $bytes + strlen($line) + 2 > self::MAX_STATEMENT_BYTES) {
+                if ($wpdb->query($prefix . implode(', ', $values)) === false) {
+                    return new \WP_Error('syncport_table_write', $wpdb->last_error ?: __('A database row batch could not be written.', 'syncport'));
+                }
+                $values = [];
+                $bytes = strlen($prefix);
+            }
+            $values[] = $line;
+            $bytes += strlen($line) + 2;
+        }
+        if ($values !== [] && $wpdb->query($prefix . implode(', ', $values)) === false) {
+            return new \WP_Error('syncport_table_write', $wpdb->last_error ?: __('A database row batch could not be written.', 'syncport'));
+        }
+        return count($rows);
     }
 
     private function tableExists(string $table): bool
@@ -226,10 +356,24 @@ final class DatabaseMigrator
         return $wpdb->prefix . 'syncport_chunks';
     }
 
+    /** @return array<string, mixed>|null */
+    private function firstChunkResult(string $operation, string $table): ?array
+    {
+        global $wpdb;
+        $result = $wpdb->get_var($wpdb->prepare(
+            "SELECT result FROM `{$this->identifier($this->receiptTable())}` WHERE operation_uuid = %s AND table_name = %s AND chunk_offset = 0",
+            $operation,
+            $table
+        ));
+        $decoded = is_string($result) ? json_decode($result, true) : null;
+        return is_array($decoded) ? $decoded : null;
+    }
+
     private function isProtectedTable(string $table, string $prefix): bool
     {
         return in_array($table, [$prefix . 'syncport_operations', $prefix . 'syncport_chunks'], true)
-            || str_starts_with($table, $prefix . 'syncport_bak_');
+            || str_starts_with($table, $prefix . 'syncport_bak_')
+            || str_starts_with($table, $prefix . 'syncport_tmp_');
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -284,7 +428,13 @@ final class DatabaseMigrator
     private function backupTable(string $operation, string $targetTable, string $targetPrefix): string
     {
         $suffix = 'syncport_bak_' . substr(hash('sha256', $operation . '|' . $targetTable), 0, 16);
-        return substr($targetPrefix . $suffix, 0, 64);
+        return substr($targetPrefix, 0, 64 - strlen($suffix)) . $suffix;
+    }
+
+    private function stagingTable(string $operation, string $targetTable, string $targetPrefix): string
+    {
+        $suffix = 'syncport_tmp_' . substr(hash('sha256', $operation . '|' . $targetTable), 0, 16);
+        return substr($targetPrefix, 0, 64 - strlen($suffix)) . $suffix;
     }
 
     /** @param array<string, mixed> $row @param array<string, string> $replace @return array<string, mixed> */
