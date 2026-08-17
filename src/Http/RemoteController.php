@@ -37,6 +37,8 @@ final class RemoteController
             foreach ([
                 'database-chunk' => 'databaseChunk',
                 'database-apply-chunk' => 'databaseApplyChunk',
+                'database-sql-chunk' => 'databaseSqlChunk',
+                'database-apply-sql-chunk' => 'databaseApplySqlChunk',
                 'database-finalize' => 'databaseFinalize',
             ] as $route => $callback) {
                 register_rest_route('syncport/v1', '/' . $route, [
@@ -57,6 +59,8 @@ final class RemoteController
             'name' => get_bloginfo('name'),
             'url' => home_url(),
             'syncport_version' => SYNCPORT_VERSION,
+            'database_protocol' => DatabaseMigrator::PROTOCOL,
+            'table_prefix' => $GLOBALS['wpdb']->prefix,
             'wordpress_version' => get_bloginfo('version'),
             'php_version' => PHP_VERSION,
             'acf' => defined('ACF_VERSION') ? ACF_VERSION : null,
@@ -162,6 +166,31 @@ final class RemoteController
             (array) ($payload['replace'] ?? []),
             (array) ($payload['selected_tables'] ?? [])
         );
+        return is_wp_error($result) ? $result : new WP_REST_Response($result);
+    }
+
+    public function databaseSqlChunk(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        if (is_wp_error($verified = $this->authenticator->verify($request))) {
+            return $verified;
+        }
+        if (!get_option('syncport_allow_pull', false)) {
+            return new WP_Error('syncport_pull_disabled', __('Pull requests are disabled on this site.', 'syncport'), ['status' => 403]);
+        }
+        $result = $this->database->exportSqlChunk($this->payload($request));
+        return is_wp_error($result) ? $result : new WP_REST_Response($result);
+    }
+
+    public function databaseApplySqlChunk(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        if (is_wp_error($verified = $this->authenticator->verify($request))) {
+            return $verified;
+        }
+        if (!get_option('syncport_allow_push', false)) {
+            return new WP_Error('syncport_push_disabled', __('Push requests are disabled on this site.', 'syncport'), ['status' => 403]);
+        }
+        $payload = $this->payload($request);
+        $result = $this->database->applySqlChunk((array) ($payload['chunk'] ?? []));
         return is_wp_error($result) ? $result : new WP_REST_Response($result);
     }
 

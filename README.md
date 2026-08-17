@@ -54,7 +54,7 @@ Version `0.3.0` includes the migration foundation and staged database transfer:
 - WPML language assignment
 - direct media discovery, transfer, UUID/SHA-256 deduplication, and ID remapping
 - URL replacement inside nested and serialized values
-- chunked, size-limited database table transfer in Replace and Merge modes
+- checksummed, compressed SQL-dump transfer for Replace mode and row transfer for Merge mode
 - staging tables, atomic Replace activation, prefix mapping, durable chunk receipts, and determinate progress
 - operation history
 - separate `manage_syncport` and `manage_syncport_tables` capabilities
@@ -69,7 +69,7 @@ The following modules are deliberately blocked rather than pretending to be safe
 - interactive mapping for missing authors and non-recursive post relationships
 - private S3 provider adapters
 
-Database migrations export up to 500 rows and 1 MB per request, then apply rows in multi-row SQL statements. An empty table selection migrates every table with the current WordPress prefix; selecting tables limits the migration to those tables. Replace mode builds operation-specific staging tables and activates all of them with one atomic `RENAME TABLE` only after every chunk succeeds. Existing live tables become operation-specific backups during that final rename. Merge mode preserves the target table and upserts source rows directly. SyncPort connection/authentication options, the active plugin list, and the current local administrator are copied into staging so the chunk runner cannot lock itself out during a migration.
+Replace migrations use the same SQL-dump protocol for Push and Pull. The source exports checksummed gzip chunks of up to 500 rows and 1 MB, splits inserts into bounded multi-row statements, and continues tables by primary-key cursor when one is available. An empty table selection migrates every table with the current WordPress prefix; selecting tables limits the migration to those tables. Replace mode writes only to operation-specific staging tables and activates all of them with one atomic `RENAME TABLE` after every chunk succeeds. Existing live tables become operation-specific backups during that final rename. Durable receipts make repeated chunks safe. Merge mode keeps the row-based protocol, preserves the target table, and upserts source rows directly. SyncPort connection/authentication options, the active plugin list, and the current local administrator are copied into staging so the runner cannot lock itself out during migration.
 
 ## Structure
 

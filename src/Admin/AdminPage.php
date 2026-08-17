@@ -195,9 +195,11 @@ final class AdminPage
             if (is_wp_error($handshake)) {
                 wp_send_json_error(['message' => $handshake->get_error_message()], 502);
             }
-            if (version_compare((string) ($handshake['syncport_version'] ?? '0.0.0'), '0.3.0', '<')) {
+            if (($handshake['database_protocol'] ?? '') !== DatabaseMigrator::PROTOCOL
+                || empty($handshake['table_prefix'])) {
                 wp_send_json_error(['message' => __('Update SyncPort on both sites before migrating database tables.', 'syncport')], 409);
             }
+            $request['target_table_prefix'] = (string) $handshake['table_prefix'];
         }
         $operation = $this->operations->create($request, (string) $request['connection_id']);
         if ($request['direction'] === 'pull') {
@@ -264,6 +266,7 @@ final class AdminPage
             $state = [
                 'table_index' => 0,
                 'offset' => 0,
+                'cursor' => [],
                 'processed' => 0,
                 'total' => array_sum(array_map(static fn (array $table): int => (int) ($table['rows'] ?? 0), $tables)),
                 'tables_completed' => 0,
@@ -276,7 +279,40 @@ final class AdminPage
         if (isset($tables[$tableIndex])) {
             $table = $tables[$tableIndex];
             $offset = (int) $state['offset'];
-            if (($operation['direction'] ?? '') === 'pull') {
+            $replaceMode = ($request['table_mode'] ?? 'replace') === 'replace';
+            if (($operation['direction'] ?? '') === 'pull' && $replaceMode) {
+                $connection = $this->connection((string) $operation['connection_id']);
+                $chunk = $this->client->post($connection, 'database-sql-chunk', [
+                    'operation' => $uuid,
+                    'table' => $table,
+                    'offset' => $offset,
+                    'cursor' => (array) ($state['cursor'] ?? []),
+                    'source_prefix' => (string) ($manifest['source']['table_prefix'] ?? ''),
+                    'target_prefix' => (string) $GLOBALS['wpdb']->prefix,
+                    'replace' => (array) ($manifest['replace'] ?? []),
+                    'selected_tables' => $tables,
+                ]);
+                if (is_wp_error($chunk)) {
+                    $this->fail($uuid, $chunk->get_error_message());
+                }
+                $applied = $this->database->applySqlChunk($chunk);
+            } elseif (($operation['direction'] ?? '') === 'push' && $replaceMode) {
+                $chunk = $this->database->exportSqlChunk([
+                    'operation' => $uuid,
+                    'table' => $table,
+                    'offset' => $offset,
+                    'cursor' => (array) ($state['cursor'] ?? []),
+                    'source_prefix' => (string) ($manifest['source']['table_prefix'] ?? ''),
+                    'target_prefix' => (string) ($request['target_table_prefix'] ?? ''),
+                    'replace' => (array) ($manifest['replace'] ?? []),
+                    'selected_tables' => $tables,
+                ]);
+                if (is_wp_error($chunk)) {
+                    $this->fail($uuid, $chunk->get_error_message());
+                }
+                $connection = $this->connection((string) $operation['connection_id']);
+                $applied = $this->client->post($connection, 'database-apply-sql-chunk', ['chunk' => $chunk]);
+            } elseif (($operation['direction'] ?? '') === 'pull') {
                 $connection = $this->connection((string) $operation['connection_id']);
                 $chunk = $this->client->post($connection, 'database-chunk', [
                     'table' => $table['name'] ?? '',
@@ -290,7 +326,7 @@ final class AdminPage
                     $uuid,
                     $table,
                     $chunk,
-                    (string) ($request['table_mode'] ?? 'replace'),
+                    'merge',
                     (string) ($manifest['source']['table_prefix'] ?? ''),
                     (array) ($manifest['replace'] ?? []),
                     $tables
@@ -305,7 +341,7 @@ final class AdminPage
                     'operation' => $uuid,
                     'table' => $table,
                     'chunk' => $chunk,
-                    'mode' => (string) ($request['table_mode'] ?? 'replace'),
+                    'mode' => 'merge',
                     'source_prefix' => (string) ($manifest['source']['table_prefix'] ?? ''),
                     'replace' => (array) ($manifest['replace'] ?? []),
                     'selected_tables' => $tables,
@@ -317,10 +353,12 @@ final class AdminPage
 
             $state['processed'] = (int) $state['processed'] + (int) ($applied['written'] ?? 0);
             $state['offset'] = (int) ($applied['next_offset'] ?? $offset);
+            $state['cursor'] = (array) ($applied['next_cursor'] ?? []);
             if (!empty($applied['done'])) {
                 $state['table_index'] = $tableIndex + 1;
                 $state['tables_completed'] = (int) $state['tables_completed'] + 1;
                 $state['offset'] = 0;
+                $state['cursor'] = [];
             }
         }
 

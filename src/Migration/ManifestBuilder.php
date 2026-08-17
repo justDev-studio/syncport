@@ -24,6 +24,7 @@ final class ManifestBuilder
                 'wordpress' => get_bloginfo('version'),
                 'syncport' => SYNCPORT_VERSION,
                 'table_prefix' => $GLOBALS['wpdb']->prefix,
+                'database_protocol' => DatabaseMigrator::PROTOCOL,
             ],
             'scope' => $scope,
             'include_media' => !empty($request['include_media']),
