@@ -69,7 +69,7 @@ The following modules are deliberately blocked rather than pretending to be safe
 - interactive mapping for missing authors and non-recursive post relationships
 - private S3 provider adapters
 
-Database migrations export and apply 100 rows per request. Replace mode recreates the source schema under the target prefix; Merge mode preserves the target table and upserts source rows. Existing target tables are copied to operation-specific backup tables before their first chunk is applied. SyncPort connection/authentication options, the active plugin list, and the current local administrator are preserved so the chunk runner cannot lock itself out during a migration.
+Database migrations export and apply 500 rows per request. An empty table selection migrates the full database; selecting tables limits the migration to those tables. Replace mode recreates the source schema under the target prefix; Merge mode preserves the target table and upserts source rows. Existing target tables are copied to operation-specific backup tables before their first chunk is applied. SyncPort connection/authentication options, the active plugin list, and the current local administrator are preserved so the chunk runner cannot lock itself out during a migration.
 
 ## Structure
 

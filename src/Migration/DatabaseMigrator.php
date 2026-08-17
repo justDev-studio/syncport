@@ -6,7 +6,7 @@ namespace JustDev\SyncPort\Migration;
 
 final class DatabaseMigrator
 {
-    public const CHUNK_SIZE = 100;
+    public const CHUNK_SIZE = 500;
 
     /** @return array<string, mixed>|\WP_Error */
     public function exportChunk(string $table, int $offset, int $limit = self::CHUNK_SIZE): array|\WP_Error
