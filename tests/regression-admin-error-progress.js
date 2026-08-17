@@ -12,8 +12,16 @@ const progressRegion = {
         },
     },
 };
+const progressValues = [];
+let progressValue = 0;
 const progressBar = {
-    value: 0,
+    get value() {
+        return progressValue;
+    },
+    set value(value) {
+        progressValue = value;
+        progressValues.push(value);
+    },
     removeAttribute(name) {
         if (name === 'value') this.value = null;
     },
@@ -67,14 +75,26 @@ const window = {
         nonce: 'test-nonce',
         strings: {
             applyingMigration: 'Applying migration…',
+            databaseProgress: 'Migrating database rows: %1$d of %2$d…',
             migrationErrors: 'Migration completed with %1$d error(s): %2$s',
             operationFailed: 'The operation failed.',
             working: 'In progress',
         },
     },
 };
-const fetch = async () => ({
-    json: async () => ({
+let fetchCalls = 0;
+const responses = [
+    {
+        success: true,
+        data: {
+            status: 'running',
+            result: {
+                errors: [],
+                database: { processed: 100, total: 200, percent: 50 },
+            },
+        },
+    },
+    {
         success: true,
         data: {
             status: 'completed_with_errors',
@@ -85,7 +105,10 @@ const fetch = async () => ({
                 ],
             },
         },
-    }),
+    },
+];
+const fetch = async () => ({
+    json: async () => responses[fetchCalls++],
 });
 
 vm.runInNewContext(fs.readFileSync('assets/admin.js', 'utf8'), {
@@ -100,6 +123,7 @@ vm.runInNewContext(fs.readFileSync('assets/admin.js', 'utf8'), {
 
 (async () => {
     await listeners.click({ target: { closest: () => button } });
+    if (fetchCalls !== 2 || !progressValues.includes(50)) throw new Error('Database chunks did not report determinate progress.');
     if (!classes.has('is-error')) throw new Error('Error class was not applied.');
     if (progressBar.value !== 100) throw new Error('Error progress remains indeterminate.');
     if (progressState.textContent !== 'The operation failed.') throw new Error('Terminal error state is missing.');

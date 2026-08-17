@@ -108,6 +108,12 @@ final class ConflictAnalyzer
                 $issues[] = sprintf(__('ACF field reference “%s” differs on the target site.', 'syncport'), ltrim((string) $name, '_'));
             }
         }
+        if (!empty($manifest['tables']) && empty($manifest['source']['table_prefix'])) {
+            $issues[] = __('Run a new preflight with an updated SyncPort version before migrating database tables.', 'syncport');
+        }
+        if (!empty($manifest['tables']) && version_compare($sourceVersion, '0.2.0', '<')) {
+            $issues[] = __('Update SyncPort on both sites before migrating database tables.', 'syncport');
+        }
         return array_values(array_unique($issues));
     }
 }

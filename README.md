@@ -39,7 +39,7 @@ For a private VCS package, add its repository to the root project before running
 
 ## Current implementation status
 
-Version `0.1.0` establishes the safe foundation:
+Version `0.2.0` includes the migration foundation and chunked database transfer:
 
 - Tools → SyncPort administration screen
 - stored connections and per-connection push/pull policy
@@ -54,12 +54,13 @@ Version `0.1.0` establishes the safe foundation:
 - WPML language assignment
 - direct media discovery, transfer, UUID/SHA-256 deduplication, and ID remapping
 - URL replacement inside nested and serialized values
+- chunked database table transfer in Replace and Merge modes
+- per-table backups, prefix mapping, durable chunk receipts, and determinate progress
 - operation history
 - separate `manage_syncport` and `manage_syncport_tables` capabilities
 
 The following modules are deliberately blocked rather than pretending to be safe before their transaction model is complete:
 
-- chunked database table apply (`Replace` and `Merge`)
 - multi-target batch coordinator
 - durable background continuation and cancellation
 - downloadable backups and rollback UI
@@ -68,7 +69,7 @@ The following modules are deliberately blocked rather than pretending to be safe
 - interactive mapping for missing authors and non-recursive post relationships
 - private S3 provider adapters
 
-The admin UI exposes database preflight, but apply returns a clear `501` response until the chunk runner and restore journal are implemented.
+Database migrations export and apply 100 rows per request. Replace mode recreates the source schema under the target prefix; Merge mode preserves the target table and upserts source rows. Existing target tables are copied to operation-specific backup tables before their first chunk is applied. SyncPort connection/authentication options, the active plugin list, and the current local administrator are preserved so the chunk runner cannot lock itself out during a migration.
 
 ## Structure
 

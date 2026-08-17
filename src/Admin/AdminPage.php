@@ -8,6 +8,7 @@ use JustDev\SyncPort\Http\RemoteClient;
 use JustDev\SyncPort\Infrastructure\ConnectionRepository;
 use JustDev\SyncPort\Infrastructure\OperationRepository;
 use JustDev\SyncPort\Migration\ConflictAnalyzer;
+use JustDev\SyncPort\Migration\DatabaseMigrator;
 use JustDev\SyncPort\Migration\ManifestBuilder;
 use JustDev\SyncPort\Migration\PostImporter;
 use JustDev\SyncPort\Security\RequestSigner;
@@ -22,6 +23,7 @@ final class AdminPage
         private readonly ManifestBuilder $builder,
         private readonly ConflictAnalyzer $analyzer,
         private readonly PostImporter $importer,
+        private readonly DatabaseMigrator $database,
         RequestSigner $signer
     ) {
         $this->client = new RemoteClient($signer);
@@ -94,6 +96,7 @@ final class AdminPage
                 'preparingPreflight' => __('Analyzing the selected data and checking the remote site…', 'syncport'),
                 'preflightComplete' => __('Preflight complete. Review the results before applying the migration.', 'syncport'),
                 'applyingMigration' => __('Applying the migration on the target site…', 'syncport'),
+                'databaseProgress' => __('Migrating database rows: %1$d of %2$d…', 'syncport'),
                 'migrationComplete' => __('Migration completed.', 'syncport'),
                 'migrationErrors' => __('Migration completed with %1$d error(s): %2$s', 'syncport'),
                 'operationFailed' => __('The operation failed.', 'syncport'),
@@ -187,6 +190,15 @@ final class AdminPage
         if ($request['direction'] === 'pull' && empty($connection['allow_pull'])) {
             wp_send_json_error(['message' => __('Pull is disabled for this connection.', 'syncport')], 403);
         }
+        if ($request['scope'] === 'database') {
+            $handshake = $this->client->post($connection, 'handshake', []);
+            if (is_wp_error($handshake)) {
+                wp_send_json_error(['message' => $handshake->get_error_message()], 502);
+            }
+            if (version_compare((string) ($handshake['syncport_version'] ?? '0.0.0'), '0.2.0', '<')) {
+                wp_send_json_error(['message' => __('Update SyncPort on both sites before migrating database tables.', 'syncport')], 409);
+            }
+        }
         $operation = $this->operations->create($request, (string) $request['connection_id']);
         if ($request['direction'] === 'pull') {
             $remote = $this->client->post($connection, 'manifest', $request + ['target_url' => home_url()]);
@@ -221,7 +233,10 @@ final class AdminPage
         $request = (array) $operation['request'];
 
         if (($request['scope'] ?? '') === 'database') {
-            wp_send_json_error(['message' => __('Database application requires the chunk runner and is not available in this foundation release.', 'syncport')], 501);
+            if (!current_user_can('manage_syncport_tables')) {
+                wp_send_json_error(['message' => __('You are not allowed to migrate database tables.', 'syncport')], 403);
+            }
+            $this->applyDatabase($uuid, $operation, $request);
         }
 
         if (($operation['direction'] ?? '') === 'pull') {
@@ -234,6 +249,84 @@ final class AdminPage
             }
         }
         $status = !empty($result['errors']) ? 'completed_with_errors' : 'completed';
+        $this->operations->update($uuid, ['status' => $status, 'result' => $result]);
+        wp_send_json_success(['operation' => $uuid, 'status' => $status, 'result' => $result]);
+    }
+
+    /** @param array<string, mixed> $operation @param array<string, mixed> $request */
+    private function applyDatabase(string $uuid, array $operation, array $request): never
+    {
+        $manifest = (array) $operation['manifest'];
+        $tables = array_values(array_filter((array) ($manifest['tables'] ?? []), 'is_array'));
+        $storedResult = ($operation['status'] ?? '') === 'running' ? (array) ($operation['result'] ?? []) : [];
+        $state = (array) ($storedResult['database'] ?? []);
+        if ($state === []) {
+            $state = [
+                'table_index' => 0,
+                'offset' => 0,
+                'processed' => 0,
+                'total' => array_sum(array_map(static fn (array $table): int => (int) ($table['rows'] ?? 0), $tables)),
+                'tables_completed' => 0,
+                'tables_total' => count($tables),
+                'percent' => 0,
+            ];
+        }
+
+        $tableIndex = (int) $state['table_index'];
+        if (isset($tables[$tableIndex])) {
+            $table = $tables[$tableIndex];
+            $offset = (int) $state['offset'];
+            if (($operation['direction'] ?? '') === 'pull') {
+                $connection = $this->connection((string) $operation['connection_id']);
+                $chunk = $this->client->post($connection, 'database-chunk', [
+                    'table' => $table['name'] ?? '',
+                    'offset' => $offset,
+                    'limit' => DatabaseMigrator::CHUNK_SIZE,
+                ]);
+                if (is_wp_error($chunk)) {
+                    $this->fail($uuid, $chunk->get_error_message());
+                }
+                $applied = $this->database->applyChunk(
+                    $uuid,
+                    $table,
+                    $chunk,
+                    (string) ($request['table_mode'] ?? 'replace'),
+                    (string) ($manifest['source']['table_prefix'] ?? ''),
+                    (array) ($manifest['replace'] ?? [])
+                );
+            } else {
+                $chunk = $this->database->exportChunk((string) ($table['name'] ?? ''), $offset);
+                if (is_wp_error($chunk)) {
+                    $this->fail($uuid, $chunk->get_error_message());
+                }
+                $connection = $this->connection((string) $operation['connection_id']);
+                $applied = $this->client->post($connection, 'database-apply-chunk', [
+                    'operation' => $uuid,
+                    'table' => $table,
+                    'chunk' => $chunk,
+                    'mode' => (string) ($request['table_mode'] ?? 'replace'),
+                    'source_prefix' => (string) ($manifest['source']['table_prefix'] ?? ''),
+                    'replace' => (array) ($manifest['replace'] ?? []),
+                ]);
+            }
+            if (is_wp_error($applied)) {
+                $this->fail($uuid, $applied->get_error_message());
+            }
+
+            $state['processed'] = (int) $state['processed'] + (int) ($applied['written'] ?? 0);
+            $state['offset'] = (int) ($applied['next_offset'] ?? $offset);
+            if (!empty($applied['done'])) {
+                $state['table_index'] = $tableIndex + 1;
+                $state['tables_completed'] = (int) $state['tables_completed'] + 1;
+                $state['offset'] = 0;
+            }
+        }
+
+        $complete = (int) $state['table_index'] >= count($tables);
+        $total = (int) $state['total'];
+        $state['percent'] = $complete ? 100 : ($total > 0 ? min(99, (int) floor((int) $state['processed'] * 100 / $total)) : 0);
+        $result = ['created' => [], 'updated' => [], 'skipped' => [], 'errors' => [], 'database' => $state];
+        $status = $complete ? 'completed' : 'running';
         $this->operations->update($uuid, ['status' => $status, 'result' => $result]);
         wp_send_json_success(['operation' => $uuid, 'status' => $status, 'result' => $result]);
     }
@@ -283,7 +376,17 @@ final class AdminPage
     private function tables(): array
     {
         global $wpdb;
-        return array_map(static fn ($row): string => (string) $row[0], $wpdb->get_results('SHOW FULL TABLES', ARRAY_N));
+        return array_values(array_filter(
+            array_map(
+                static fn ($row): string => (string) $row[0],
+                array_filter(
+                    $wpdb->get_results('SHOW FULL TABLES', ARRAY_N),
+                    static fn (array $row): bool => !isset($row[1]) || strtoupper((string) $row[1]) === 'BASE TABLE'
+                )
+            ),
+            static fn (string $table): bool => !in_array($table, [$wpdb->prefix . 'syncport_operations', $wpdb->prefix . 'syncport_chunks'], true)
+                && !str_starts_with($table, $wpdb->prefix . 'syncport_bak_')
+        ));
     }
 
     /** @return array{0: string, 1: string} */

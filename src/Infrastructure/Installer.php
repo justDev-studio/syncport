@@ -15,6 +15,7 @@ final class Installer
         }
 
         $table = $wpdb->prefix . 'syncport_operations';
+        $chunksTable = $wpdb->prefix . 'syncport_chunks';
         $charset = $wpdb->get_charset_collate();
         $sql = "CREATE TABLE {$table} (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -33,12 +34,25 @@ final class Installer
             KEY status (status),
             KEY created_at (created_at)
         ) {$charset};";
+        $chunksSql = "CREATE TABLE {$chunksTable} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            operation_uuid char(36) NOT NULL,
+            table_name varchar(64) NOT NULL,
+            chunk_offset bigint(20) unsigned NOT NULL,
+            chunk_hash char(64) NOT NULL,
+            result longtext NOT NULL,
+            created_at datetime NOT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY operation_chunk (operation_uuid, table_name, chunk_offset),
+            KEY created_at (created_at)
+        ) {$charset};";
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
         dbDelta($sql);
+        dbDelta($chunksSql);
 
         self::addCapabilities();
-        update_option('syncport_db_version', '1', false);
+        update_option('syncport_db_version', '2', false);
     }
 
     private static function addCapabilities(): void

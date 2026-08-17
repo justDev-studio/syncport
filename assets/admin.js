@@ -43,7 +43,7 @@
         notice.replaceChildren(wrapper);
     };
 
-    const updateProgress = (label, state = 'running') => {
+    const updateProgress = (label, state = 'running', value = null) => {
         if (!progressRegion || !progressBar || !progressLabel || !progressState) return;
         progressRegion.hidden = false;
         progressRegion.classList.toggle('is-complete', state === 'complete');
@@ -52,6 +52,9 @@
         progressState.textContent = state === 'complete' ? '100%' : state === 'error' ? config.strings.operationFailed : config.strings.working;
         if (state === 'complete' || state === 'error') {
             progressBar.value = 100;
+        } else if (Number.isFinite(value)) {
+            progressBar.value = Math.max(0, Math.min(100, value));
+            progressState.textContent = `${progressBar.value}%`;
         } else {
             progressBar.removeAttribute('value');
         }
@@ -267,7 +270,17 @@
         button.setAttribute('aria-busy', 'true');
         updateProgress(config.strings.applyingMigration);
         try {
-            const result = await request('syncport_apply', { operation: button.dataset.applyOperation, resolutions: JSON.stringify(resolutions) });
+            let result;
+            do {
+                result = await request('syncport_apply', { operation: button.dataset.applyOperation, resolutions: JSON.stringify(resolutions) });
+                const database = result.result?.database;
+                if (result.status === 'running' && database) {
+                    const label = config.strings.databaseProgress
+                        .replace('%1$d', Number(database.processed))
+                        .replace('%2$d', Number(database.total));
+                    updateProgress(label, 'running', Number(database.percent));
+                }
+            } while (result.status === 'running');
             const errors = result.result?.errors || [];
             if (errors.length) {
                 const details = [...new Set(errors.map((error) => error.message).filter(Boolean))].join(' ');

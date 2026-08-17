@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace JustDev\SyncPort\Http;
 
 use JustDev\SyncPort\Migration\ConflictAnalyzer;
+use JustDev\SyncPort\Migration\DatabaseMigrator;
 use JustDev\SyncPort\Migration\ManifestBuilder;
 use JustDev\SyncPort\Migration\PostImporter;
 use JustDev\SyncPort\Security\RequestAuthenticator;
@@ -18,7 +19,8 @@ final class RemoteController
         private readonly RequestAuthenticator $authenticator,
         private readonly ManifestBuilder $builder,
         private readonly ConflictAnalyzer $analyzer,
-        private readonly PostImporter $importer
+        private readonly PostImporter $importer,
+        private readonly DatabaseMigrator $database
     ) {
     }
 
@@ -29,6 +31,13 @@ final class RemoteController
                 register_rest_route('syncport/v1', '/' . $endpoint, [
                     'methods' => 'POST',
                     'callback' => [$this, $endpoint],
+                    'permission_callback' => '__return_true',
+                ]);
+            }
+            foreach (['database-chunk' => 'databaseChunk', 'database-apply-chunk' => 'databaseApplyChunk'] as $route => $callback) {
+                register_rest_route('syncport/v1', '/' . $route, [
+                    'methods' => 'POST',
+                    'callback' => [$this, $callback],
                     'permission_callback' => '__return_true',
                 ]);
             }
@@ -112,6 +121,43 @@ final class RemoteController
             (array) ($payload['manifest'] ?? []),
             $resolutions
         ));
+    }
+
+    public function databaseChunk(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        if (is_wp_error($verified = $this->authenticator->verify($request))) {
+            return $verified;
+        }
+        if (!get_option('syncport_allow_pull', false)) {
+            return new WP_Error('syncport_pull_disabled', __('Pull requests are disabled on this site.', 'syncport'), ['status' => 403]);
+        }
+        $payload = $this->payload($request);
+        $chunk = $this->database->exportChunk(
+            (string) ($payload['table'] ?? ''),
+            (int) ($payload['offset'] ?? 0),
+            (int) ($payload['limit'] ?? DatabaseMigrator::CHUNK_SIZE)
+        );
+        return is_wp_error($chunk) ? $chunk : new WP_REST_Response($chunk);
+    }
+
+    public function databaseApplyChunk(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        if (is_wp_error($verified = $this->authenticator->verify($request))) {
+            return $verified;
+        }
+        if (!get_option('syncport_allow_push', false)) {
+            return new WP_Error('syncport_push_disabled', __('Push requests are disabled on this site.', 'syncport'), ['status' => 403]);
+        }
+        $payload = $this->payload($request);
+        $result = $this->database->applyChunk(
+            sanitize_text_field((string) ($payload['operation'] ?? '')),
+            (array) ($payload['table'] ?? []),
+            (array) ($payload['chunk'] ?? []),
+            sanitize_key((string) ($payload['mode'] ?? 'replace')),
+            (string) ($payload['source_prefix'] ?? ''),
+            (array) ($payload['replace'] ?? [])
+        );
+        return is_wp_error($result) ? $result : new WP_REST_Response($result);
     }
 
     /** @return array<string, mixed> */

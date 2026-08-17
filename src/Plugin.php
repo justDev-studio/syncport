@@ -10,6 +10,7 @@ use JustDev\SyncPort\Infrastructure\ConnectionRepository;
 use JustDev\SyncPort\Infrastructure\Installer;
 use JustDev\SyncPort\Infrastructure\OperationRepository;
 use JustDev\SyncPort\Migration\ConflictAnalyzer;
+use JustDev\SyncPort\Migration\DatabaseMigrator;
 use JustDev\SyncPort\Migration\ManifestBuilder;
 use JustDev\SyncPort\Migration\PostImporter;
 use JustDev\SyncPort\Migration\RemoteMedia;
@@ -34,7 +35,7 @@ final class Plugin
         }
 
         $this->booted = true;
-        if (get_option('syncport_db_version') !== '1') {
+        if (get_option('syncport_db_version') !== '2') {
             Installer::activate();
         }
         load_plugin_textdomain('syncport', false, dirname(plugin_basename(SYNCPORT_FILE)) . '/languages');
@@ -44,14 +45,15 @@ final class Plugin
         $builder = new ManifestBuilder();
         $analyzer = new ConflictAnalyzer();
         $importer = new PostImporter();
+        $database = new DatabaseMigrator();
         $signer = new RequestSigner();
         $authenticator = new RequestAuthenticator();
 
         (new RemoteMedia())->register();
-        (new RemoteController($authenticator, $builder, $analyzer, $importer))->register();
+        (new RemoteController($authenticator, $builder, $analyzer, $importer, $database))->register();
 
         if (is_admin()) {
-            (new AdminPage($connections, $operations, $builder, $analyzer, $importer, $signer))->register();
+            (new AdminPage($connections, $operations, $builder, $analyzer, $importer, $database, $signer))->register();
         }
     }
 

@@ -23,6 +23,7 @@ final class ManifestBuilder
                 'name' => get_bloginfo('name'),
                 'wordpress' => get_bloginfo('version'),
                 'syncport' => SYNCPORT_VERSION,
+                'table_prefix' => $GLOBALS['wpdb']->prefix,
             ],
             'scope' => $scope,
             'include_media' => !empty($request['include_media']),
@@ -272,7 +273,17 @@ final class ManifestBuilder
     private function tables(array $selected): array
     {
         global $wpdb;
-        $allowed = array_map(static fn ($row): string => (string) $row[0], $wpdb->get_results('SHOW FULL TABLES', ARRAY_N));
+        $allowed = array_values(array_filter(
+            array_map(
+                static fn ($row): string => (string) $row[0],
+                array_filter(
+                    $wpdb->get_results('SHOW FULL TABLES', ARRAY_N),
+                    static fn (array $row): bool => !isset($row[1]) || strtoupper((string) $row[1]) === 'BASE TABLE'
+                )
+            ),
+            static fn (string $table): bool => !in_array($table, [$wpdb->prefix . 'syncport_operations', $wpdb->prefix . 'syncport_chunks'], true)
+                && !str_starts_with($table, $wpdb->prefix . 'syncport_bak_')
+        ));
         $selected = $selected === [] ? $allowed : array_intersect(array_map('sanitize_text_field', $selected), $allowed);
         $tables = [];
         foreach ($selected as $table) {
