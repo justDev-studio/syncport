@@ -411,7 +411,7 @@ final class DatabaseMigrator
         return ['tables' => count($tables)];
     }
 
-    /** @return true|\WP_Error */
+    /** @return bool|\WP_Error */
     private function prepareTarget(
         string $targetTable,
         string $writeTable,
@@ -420,7 +420,7 @@ final class DatabaseMigrator
         string $sourcePrefix,
         string $operation,
         array $selectedTables
-    ): true|\WP_Error {
+    ): bool|\WP_Error {
         global $wpdb;
 
         if ($createSql === '') {
@@ -782,8 +782,8 @@ final class DatabaseMigrator
         return [];
     }
 
-    /** @return true|\WP_Error */
-    private function preserveOperationalRows(string $targetTable, string $stagingTable): true|\WP_Error
+    /** @return bool|\WP_Error */
+    private function preserveOperationalRows(string $targetTable, string $stagingTable): bool|\WP_Error
     {
         global $wpdb;
         if (!$this->tableExists($targetTable)) {

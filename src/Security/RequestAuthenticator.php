@@ -9,7 +9,7 @@ use WP_REST_Request;
 
 final class RequestAuthenticator
 {
-    public function verify(WP_REST_Request $request): true|WP_Error
+    public function verify(WP_REST_Request $request): bool|WP_Error
     {
         $timestamp = (string) $request->get_header('x-syncport-timestamp');
         $nonce = (string) $request->get_header('x-syncport-nonce');
