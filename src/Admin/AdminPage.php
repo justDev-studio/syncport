@@ -77,7 +77,7 @@ final class AdminPage
             'strings' => [
                 'working' => __('Working…', 'syncport'),
                 'failed' => __('The request failed.', 'syncport'),
-                'confirmApply' => __('Apply this migration? A backup will be created before destructive table operations.', 'syncport'),
+                'confirmApply' => __('Apply this migration? The selected target database tables will be replaced.', 'syncport'),
                 'confirmDelete' => __('Delete this connection?', 'syncport'),
                 'preflight' => __('Preflight', 'syncport'),
                 'summary' => __('%1$d entities, %2$d options, %3$d tables, %4$d conflicts.', 'syncport'),
@@ -182,6 +182,9 @@ final class AdminPage
         if ($request['scope'] === 'database' && !current_user_can('manage_syncport_tables')) {
             wp_send_json_error(['message' => __('You are not allowed to migrate database tables.', 'syncport')], 403);
         }
+        if ($request['scope'] === 'database' && $request['table_scope'] === 'selected' && $request['tables'] === []) {
+            wp_send_json_error(['message' => __('Select at least one database table to migrate.', 'syncport')], 422);
+        }
 
         $connection = $this->connection((string) $request['connection_id']);
         if ($request['direction'] === 'push' && empty($connection['allow_push'])) {
@@ -200,10 +203,16 @@ final class AdminPage
                 wp_send_json_error(['message' => __('Update SyncPort on both sites before migrating database tables.', 'syncport')], 409);
             }
             $request['target_table_prefix'] = (string) $handshake['table_prefix'];
+            $request['target_path'] = $request['direction'] === 'push'
+                ? (string) ($handshake['path'] ?? '')
+                : wp_normalize_path(untrailingslashit(ABSPATH));
         }
         $operation = $this->operations->create($request, (string) $request['connection_id']);
         if ($request['direction'] === 'pull') {
-            $remote = $this->client->post($connection, 'manifest', $request + ['target_url' => home_url()]);
+            $remote = $this->client->post($connection, 'manifest', $request + [
+                'target_url' => home_url(),
+                'target_path' => wp_normalize_path(untrailingslashit(ABSPATH)),
+            ]);
             if (is_wp_error($remote)) {
                 $this->fail($operation, $remote->get_error_message());
             }
@@ -279,8 +288,7 @@ final class AdminPage
         if (isset($tables[$tableIndex])) {
             $table = $tables[$tableIndex];
             $offset = (int) $state['offset'];
-            $replaceMode = ($request['table_mode'] ?? 'replace') === 'replace';
-            if (($operation['direction'] ?? '') === 'pull' && $replaceMode) {
+            if (($operation['direction'] ?? '') === 'pull') {
                 $connection = $this->connection((string) $operation['connection_id']);
                 $chunk = $this->client->post($connection, 'database-sql-chunk', [
                     'operation' => $uuid,
@@ -296,7 +304,7 @@ final class AdminPage
                     $this->fail($uuid, $chunk->get_error_message());
                 }
                 $applied = $this->database->applySqlChunk($chunk);
-            } elseif (($operation['direction'] ?? '') === 'push' && $replaceMode) {
+            } else {
                 $chunk = $this->database->exportSqlChunk([
                     'operation' => $uuid,
                     'table' => $table,
@@ -312,40 +320,6 @@ final class AdminPage
                 }
                 $connection = $this->connection((string) $operation['connection_id']);
                 $applied = $this->client->post($connection, 'database-apply-sql-chunk', ['chunk' => $chunk]);
-            } elseif (($operation['direction'] ?? '') === 'pull') {
-                $connection = $this->connection((string) $operation['connection_id']);
-                $chunk = $this->client->post($connection, 'database-chunk', [
-                    'table' => $table['name'] ?? '',
-                    'offset' => $offset,
-                    'limit' => DatabaseMigrator::CHUNK_SIZE,
-                ]);
-                if (is_wp_error($chunk)) {
-                    $this->fail($uuid, $chunk->get_error_message());
-                }
-                $applied = $this->database->applyChunk(
-                    $uuid,
-                    $table,
-                    $chunk,
-                    'merge',
-                    (string) ($manifest['source']['table_prefix'] ?? ''),
-                    (array) ($manifest['replace'] ?? []),
-                    $tables
-                );
-            } else {
-                $chunk = $this->database->exportChunk((string) ($table['name'] ?? ''), $offset);
-                if (is_wp_error($chunk)) {
-                    $this->fail($uuid, $chunk->get_error_message());
-                }
-                $connection = $this->connection((string) $operation['connection_id']);
-                $applied = $this->client->post($connection, 'database-apply-chunk', [
-                    'operation' => $uuid,
-                    'table' => $table,
-                    'chunk' => $chunk,
-                    'mode' => 'merge',
-                    'source_prefix' => (string) ($manifest['source']['table_prefix'] ?? ''),
-                    'replace' => (array) ($manifest['replace'] ?? []),
-                    'selected_tables' => $tables,
-                ]);
             }
             if (is_wp_error($applied)) {
                 $this->fail($uuid, $applied->get_error_message());
@@ -363,7 +337,7 @@ final class AdminPage
         }
 
         $complete = (int) $state['table_index'] >= count($tables);
-        if ($complete && ($request['table_mode'] ?? 'replace') === 'replace') {
+        if ($complete) {
             $sourcePrefix = (string) ($manifest['source']['table_prefix'] ?? '');
             if (($operation['direction'] ?? '') === 'pull') {
                 $finalized = $this->database->finalizeReplace($uuid, $tables, $sourcePrefix);
@@ -404,15 +378,20 @@ final class AdminPage
     {
         $postIds = (array) ($_POST['post_ids'] ?? []);
         $options = preg_split('/[\s,]+/', sanitize_text_field((string) ($_POST['options'] ?? ''))) ?: [];
+        $scope = in_array($_POST['scope'] ?? '', ['content', 'options', 'database'], true) ? $_POST['scope'] : 'content';
+        $tableScope = ($_POST['table_scope'] ?? '') === 'selected' ? 'selected' : 'all';
         return [
             'direction' => in_array($_POST['direction'] ?? '', ['push', 'pull'], true) ? $_POST['direction'] : 'push',
             'connection_id' => sanitize_text_field((string) ($_POST['connection_id'] ?? '')),
-            'scope' => in_array($_POST['scope'] ?? '', ['content', 'options', 'database'], true) ? $_POST['scope'] : 'content',
+            'scope' => $scope,
             'post_ids' => array_values(array_filter(array_map('absint', $postIds))),
             'post_types' => array_values(array_filter(array_map('sanitize_key', (array) ($_POST['post_types'] ?? ['page'])))),
             'options' => array_values(array_filter(array_map('sanitize_key', $options))),
-            'tables' => array_values(array_filter(array_map('sanitize_text_field', (array) ($_POST['tables'] ?? [])))),
-            'table_mode' => in_array($_POST['table_mode'] ?? '', ['replace', 'merge'], true) ? $_POST['table_mode'] : 'replace',
+            'tables' => $scope === 'database' && $tableScope === 'all'
+                ? []
+                : array_values(array_filter(array_map('sanitize_text_field', (array) ($_POST['tables'] ?? [])))),
+            'table_scope' => $tableScope,
+            'table_mode' => 'replace',
             'include_media' => !empty($_POST['include_media']),
             'mirror_media' => !empty($_POST['mirror_media']),
         ];
@@ -442,6 +421,7 @@ final class AdminPage
                 )
             ),
             static fn (string $table): bool => !in_array($table, [$wpdb->prefix . 'syncport_operations', $wpdb->prefix . 'syncport_chunks'], true)
+                && !str_starts_with($table, '_mig_')
                 && !str_starts_with($table, $wpdb->prefix . 'syncport_bak_')
                 && !str_starts_with($table, $wpdb->prefix . 'syncport_tmp_')
         ));

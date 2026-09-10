@@ -14,6 +14,17 @@ final class ManifestBuilder
     public function build(array $request): array
     {
         $scope = sanitize_key((string) ($request['scope'] ?? 'content'));
+        $replace = [];
+        $sourceUrl = home_url();
+        $targetUrl = (string) ($request['target_url'] ?? '');
+        if ($sourceUrl !== '' && $targetUrl !== '') {
+            $replace[$sourceUrl] = $targetUrl;
+        }
+        $sourcePath = wp_normalize_path(untrailingslashit(ABSPATH));
+        $targetPath = wp_normalize_path(untrailingslashit((string) ($request['target_path'] ?? '')));
+        if ($sourcePath !== '' && $targetPath !== '') {
+            $replace[$sourcePath] = $targetPath;
+        }
         $manifest = [
             'schema' => 1,
             'id' => wp_generate_uuid4(),
@@ -28,7 +39,7 @@ final class ManifestBuilder
             ],
             'scope' => $scope,
             'include_media' => !empty($request['include_media']),
-            'replace' => [home_url() => (string) ($request['target_url'] ?? '')],
+            'replace' => $replace,
         ];
 
         if ($scope === 'database') {
@@ -283,6 +294,7 @@ final class ManifestBuilder
                 )
             ),
             static fn (string $table): bool => !in_array($table, [$wpdb->prefix . 'syncport_operations', $wpdb->prefix . 'syncport_chunks'], true)
+                && !str_starts_with($table, '_mig_')
                 && !str_starts_with($table, $wpdb->prefix . 'syncport_bak_')
                 && !str_starts_with($table, $wpdb->prefix . 'syncport_tmp_')
         ));

@@ -87,7 +87,18 @@ final class PostImporter
     {
         $user = !empty($author['email']) ? get_user_by('email', (string) $author['email']) : false;
         $user = $user ?: (!empty($author['login']) ? get_user_by('login', (string) $author['login']) : false);
-        return $user ? (int) $user->ID : 0;
+        if ($user) {
+            return (int) $user->ID;
+        }
+
+        $administrators = get_users([
+            'role' => 'administrator',
+            'orderby' => 'ID',
+            'order' => 'ASC',
+            'number' => 1,
+            'fields' => 'ids',
+        ]);
+        return (int) ($administrators[0] ?? 0);
     }
 
     /** @param array<string, mixed> $meta @param array<string, string> $replace @param array<int, int> $mediaMap */

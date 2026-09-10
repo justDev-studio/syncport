@@ -33,8 +33,8 @@ For a private VCS package, add its repository to the root project before running
 - Relationship and Post Object fields are not recursively migrated.
 - Media is matched by UUID and then SHA-256. Unknown object-storage integrations use download-and-import fallback.
 - ACF Options migration transfers values only. Field registration must already exist on the target.
-- Full database migration supports replace or merge semantics and optional media mirroring.
-- Destructive work requires a backup. Entity backups are retained for 7 days and logs for 30 days.
+- Full database migration replaces all tables with the current WordPress prefix; individual tables can be selected explicitly.
+- Destructive database replacement is staged in temporary tables before finalization.
 - The plugin never automatically deletes S3 objects.
 
 ## Current implementation status
@@ -50,12 +50,12 @@ Version `0.3.0` includes the migration foundation and staged database transfer:
 - UUID assignment and slug fallback matching
 - preflight conflict analysis
 - entity import with exact meta and taxonomy replacement
-- author matching by email and login
+- author matching by email and login, with the target site's primary administrator as fallback
 - WPML language assignment
 - direct media discovery, transfer, UUID/SHA-256 deduplication, and ID remapping
 - URL replacement inside nested and serialized values
-- checksummed, compressed SQL-dump transfer for Replace mode and row transfer for Merge mode
-- staging tables, atomic Replace activation, prefix mapping, durable chunk receipts, and determinate progress
+- checksummed, compressed SQL-dump transfer based on the bundled `jd-wp-sync-db-master` engine
+- `_mig_` staging tables, deferred foreign-key constraints, prefix mapping, durable chunk receipts, and determinate progress
 - operation history
 - separate `manage_syncport` and `manage_syncport_tables` capabilities
 
@@ -69,7 +69,7 @@ The following modules are deliberately blocked rather than pretending to be safe
 - interactive mapping for missing authors and non-recursive post relationships
 - private S3 provider adapters
 
-Replace migrations use the same SQL-dump protocol for Push and Pull. The source exports checksummed gzip chunks of up to 500 rows and 1 MB, splits inserts into bounded multi-row statements, and continues tables by primary-key cursor when one is available. An empty table selection migrates every table with the current WordPress prefix; selecting tables limits the migration to those tables. Replace mode writes only to operation-specific staging tables and activates all of them with one atomic `RENAME TABLE` after every chunk succeeds. Existing live tables become operation-specific backups during that final rename. Durable receipts make repeated chunks safe. Merge mode keeps the row-based protocol, preserves the target table, and upserts source rows directly. SyncPort connection/authentication options, the active plugin list, and the current local administrator are copied into staging so the runner cannot lock itself out during migration.
+Full database Push and Pull use the SQL engine ported from `jd-wp-sync-db-master`. The source reads 100 rows at a time and packs them into checksummed, compressed raw SQL chunks up to 1 MB, splits inserts at 50 KB, excludes transient options, recursively replaces values inside serialized data, JSON, arrays, and objects, and continues by integer primary-key cursor when available. Foreign-key constraints are removed from temporary table schemas and restored after finalization. The default table scope migrates every table with the current WordPress prefix; the manual scope requires explicit table selection. Data is written to `_mig_` tables, then the corresponding live tables are replaced during finalization. Durable receipts make repeated chunks safe. SyncPort connection/authentication options, the active plugin list, and a target-site administrator are copied into staging so the runner cannot lock itself out during migration.
 
 ## Structure
 

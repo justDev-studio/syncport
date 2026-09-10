@@ -85,6 +85,20 @@
         });
     });
 
+    const updateTableScope = () => {
+        const selectedInput = migrationForm?.querySelector('input[name="table_scope"]:checked');
+        const selection = migrationForm?.querySelector('[data-table-selection]');
+        if (!selectedInput || !selection) return;
+        const selected = selectedInput.value === 'selected';
+        selection.hidden = !selected;
+        selection.querySelectorAll('select, button').forEach((control) => {
+            control.disabled = !selected || selection.closest('[data-scope-fields]').hidden;
+        });
+        migrationForm.querySelectorAll('input[name="table_scope"]').forEach((input) => {
+            input.setAttribute('aria-expanded', String(input.checked && selected));
+        });
+    };
+
     const updateScope = (input) => {
         document.querySelectorAll('[data-scope-fields]').forEach((fields) => {
             const active = fields.dataset.scopeFields === input.value;
@@ -93,6 +107,7 @@
                 control.disabled = !active;
             });
         });
+        updateTableScope();
     };
 
     document.querySelectorAll('input[name="scope"]').forEach((input) => {
@@ -102,6 +117,10 @@
         });
     });
     updateScope(document.querySelector('input[name="scope"]:checked'));
+
+    document.querySelectorAll('input[name="table_scope"]').forEach((input) => {
+        input.addEventListener('change', updateTableScope);
+    });
 
     document.querySelectorAll('[data-select-tables]').forEach((button) => {
         button.addEventListener('click', () => {
