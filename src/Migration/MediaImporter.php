@@ -16,8 +16,8 @@ final class MediaImporter
             $checksumVerified = ($item['checksum_verified'] ?? false) === true;
             $sha256 = $checksumVerified ? sanitize_text_field((string) ($item['sha256'] ?? '')) : '';
             $remote = sanitize_key((string) ($item['storage'] ?? '')) === 'remote';
-            $remoteUrl = $remote ? esc_url_raw((string) ($item['url'] ?? '')) : '';
-            if ($remote && !wp_http_validate_url($remoteUrl)) {
+            $remoteUrl = $remote ? $this->remoteUrl((string) ($item['url'] ?? '')) : '';
+            if ($remote && $remoteUrl === '') {
                 $errors[] = ['source_id' => $sourceId, 'message' => __('The media URL is invalid.', 'syncport')];
                 continue;
             }
@@ -28,7 +28,7 @@ final class MediaImporter
                 $remote ? sanitize_text_field((string) ($item['attached_file'] ?? '')) : ''
             );
             if (!$targetId) {
-                $targetId = $remote ? $this->registerRemote($item) : $this->download($item);
+                $targetId = $remote ? $this->registerRemote($item, $remoteUrl) : $this->download($item);
             }
             if (is_wp_error($targetId)) {
                 $errors[] = ['source_id' => $sourceId, 'message' => $targetId->get_error_message()];
@@ -80,13 +80,8 @@ final class MediaImporter
     }
 
     /** @param array<string, mixed> $item @return int|\WP_Error */
-    private function registerRemote(array $item): int|\WP_Error
+    private function registerRemote(array $item, string $url): int|\WP_Error
     {
-        $url = esc_url_raw((string) ($item['url'] ?? ''));
-        if (!wp_http_validate_url($url)) {
-            return new \WP_Error('syncport_invalid_media_url', __('The media URL is invalid.', 'syncport'));
-        }
-
         $sourcePost = (array) ($item['post'] ?? []);
         $attachment = [
             'guid' => $url,
@@ -119,6 +114,19 @@ final class MediaImporter
         update_post_meta($id, '_wp_attachment_image_alt', sanitize_text_field((string) ($item['alt'] ?? '')));
         update_post_meta($id, '_syncport_remote_url', $url);
         return $id;
+    }
+
+    private function remoteUrl(string $url): string
+    {
+        $url = trim($url);
+        if (str_starts_with($url, '//')) {
+            $scheme = (string) wp_parse_url(home_url(), PHP_URL_SCHEME);
+            $url = ($scheme !== '' ? $scheme : 'https') . ':' . $url;
+        }
+        $url = esc_url_raw($url, ['http', 'https']);
+        $scheme = strtolower((string) wp_parse_url($url, PHP_URL_SCHEME));
+        $host = (string) wp_parse_url($url, PHP_URL_HOST);
+        return in_array($scheme, ['http', 'https'], true) && $host !== '' ? $url : '';
     }
 
     /** @param array<string, mixed> $item @return int|\WP_Error */

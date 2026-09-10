@@ -46,6 +46,7 @@ register_shutdown_function(static function () use ($wordpressRoot): void {
 $GLOBALS['syncportAttachedFile'] = false;
 $GLOBALS['syncportAttachmentUrl'] = 'https://bucket.example/media/photo.jpg';
 $GLOBALS['syncportDownloadCalls'] = 0;
+$GLOBALS['syncportHttpUrlAllowed'] = false;
 $GLOBALS['syncportInsertedAttachments'] = [];
 $GLOBALS['syncportUpdatedMeta'] = [];
 $GLOBALS['syncportAttachmentMetadata'] = [];
@@ -54,7 +55,10 @@ $GLOBALS['syncportExistingAttachedFileId'] = 0;
 function absint(mixed $value): int { return abs((int) $value); }
 function __(string $message): string { return $message; }
 function esc_url_raw(string $url): string { return $url; }
-function wp_http_validate_url(string $url): bool { return str_starts_with($url, 'https://'); }
+function wp_http_validate_url(string $url): bool
+{
+    return $GLOBALS['syncportHttpUrlAllowed'] && str_starts_with($url, 'https://');
+}
 function sanitize_text_field(string $value): string { return $value; }
 function sanitize_textarea_field(string $value): string { return $value; }
 function sanitize_file_name(string $value): string { return $value; }
@@ -141,7 +145,7 @@ $media = $method->invoke($builder, new WP_Post(), []);
 $result = (new JustDev\SyncPort\Migration\MediaImporter())->import($media);
 
 if ($result['errors'] !== []) {
-    fwrite(STDERR, $result['errors'][0]['message'] . PHP_EOL);
+    fwrite(STDERR, "A valid S3 URL must not be rejected by the outbound HTTP request validator.\n");
     exit(1);
 }
 if (($media[0]['sha256'] ?? null) !== '') {
@@ -150,6 +154,7 @@ if (($media[0]['sha256'] ?? null) !== '') {
 }
 
 $legacyMedia = $media;
+$GLOBALS['syncportHttpUrlAllowed'] = true;
 $legacyMedia[0]['sha256'] = hash('sha256', 'old-local-object');
 unset($legacyMedia[0]['checksum_verified'], $legacyMedia[0]['storage']);
 $legacyResult = (new JustDev\SyncPort\Migration\MediaImporter())->import($legacyMedia);
@@ -168,9 +173,17 @@ if (($verifiedResult['errors'][0]['message'] ?? '') !== 'The downloaded media ch
     exit(1);
 }
 
+$GLOBALS['syncportHttpUrlAllowed'] = false;
+$blockedLocalResult = (new JustDev\SyncPort\Migration\MediaImporter())->import($verifiedMedia);
+if (($blockedLocalResult['errors'][0]['message'] ?? '') !== 'The media URL is invalid.') {
+    fwrite(STDERR, "Downloaded media must retain the outbound HTTP request validation.\n");
+    exit(1);
+}
+
 $GLOBALS['syncportAttachedFile'] = $wordpressRoot . 'local-photo.jpg';
 file_put_contents($GLOBALS['syncportAttachedFile'], 'old-local-object');
 $offloadedMedia = $method->invoke($builder, new WP_Post(), []);
+$GLOBALS['syncportHttpUrlAllowed'] = false;
 $downloadCalls = $GLOBALS['syncportDownloadCalls'];
 $offloadedResult = (new JustDev\SyncPort\Migration\MediaImporter())->import($offloadedMedia);
 if ($offloadedResult['errors'] !== []) {
